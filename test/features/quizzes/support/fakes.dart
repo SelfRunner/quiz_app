@@ -740,7 +740,10 @@ class TestEnv {
         ),
         GoRoute(
           path: '/quizzes/:id',
-          builder: (_, s) => QuizDetailScreen(quizId: s.pathParameters['id']!),
+          builder: (_, s) => QuizDetailScreen(
+            quizId: s.pathParameters['id']!,
+            justCreated: s.uri.queryParameters['justCreated'] == '1',
+          ),
           routes: [
             GoRoute(
               path: 'edit',

@@ -23,6 +23,7 @@ class QuizResultsView extends StatelessWidget {
     this.onRetryMissed,
     this.saveError,
     this.quizFor,
+    this.onEditQuestions,
   });
 
   final QuizSession session;
@@ -36,6 +37,9 @@ class QuizResultsView extends StatelessWidget {
 
   /// The quiz a question belongs to (context for "Explain").
   final Quiz? Function(Question question)? quizFor;
+
+  /// Opens the quiz editor (owners only; null hides the link).
+  final VoidCallback? onEditQuestions;
 
   @override
   Widget build(BuildContext context) {
@@ -116,6 +120,13 @@ class QuizResultsView extends StatelessWidget {
                   label: Text('Retry missed ($missed)'),
                 ),
               OutlinedButton(onPressed: onDone, child: const Text('Done')),
+              if (onEditQuestions != null)
+                TextButton.icon(
+                  key: const Key('results-edit-questions'),
+                  onPressed: onEditQuestions,
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Edit questions'),
+                ),
             ],
           ),
         ],

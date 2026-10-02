@@ -38,6 +38,7 @@ class ExamPlayer extends ConsumerStatefulWidget {
     required this.quiz,
     required this.onClose,
     this.config,
+    this.onEditQuestions,
   });
 
   final Quiz quiz;
@@ -45,6 +46,9 @@ class ExamPlayer extends ConsumerStatefulWidget {
   /// Config from the setup dialog; null shows the setup page first.
   final ExamConfig? config;
   final VoidCallback onClose;
+
+  /// "Edit questions" on the results (owners only).
+  final VoidCallback? onEditQuestions;
 
   @override
   ConsumerState<ExamPlayer> createState() => _ExamPlayerState();
@@ -484,22 +488,22 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
   Future<void> _openGrid() async {
     final s = _session;
     if (s == null) return;
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            Insets.lg,
-            0,
-            Insets.lg,
-            Insets.lg,
-          ),
-          child: _QuestionGrid(
-            session: s,
-            onSelect: (i) => Navigator.of(context).pop(i),
-          ),
+    final picked = await showAdaptivePanel<int>(
+      context,
+      title: 'Questions',
+      maxWidth: 480,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Insets.lg,
+          Insets.xs,
+          Insets.lg,
+          Insets.lg,
+        ),
+        child: _QuestionGrid(
+          key: const Key('exam-grid-panel'),
+          session: s,
+          inPanel: true,
+          onSelect: (i) => Navigator.of(context).pop(i),
         ),
       ),
     );
@@ -557,6 +561,7 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
         onRetrySave: _saveResult,
         onSelfGrade: _selfGrade,
         quiz: widget.quiz,
+        onEditQuestions: widget.onEditQuestions,
         aiGrades: _aiGrades,
         partialIds: _partial,
         gradingProgress: _gradingProgress,
@@ -798,34 +803,56 @@ class _ExamBody extends StatelessWidget {
         ),
         child: Row(
           children: [
-            OutlinedButton.icon(
-              key: const Key('exam-prev'),
-              onPressed: s.isFirst ? null : () => onGoTo(s.index - 1),
-              icon: const Icon(Icons.chevron_left, size: 18),
-              label: const Text('Previous'),
-            ),
-            const Spacer(),
-            if (!sidePanel)
-              TextButton.icon(
-                key: const Key('exam-grid-button'),
-                onPressed: onOpenGrid,
-                icon: const Icon(Icons.grid_view_rounded, size: 18),
-                label: Text('${s.index + 1} / ${s.length}'),
+            if (medium)
+              OutlinedButton.icon(
+                key: const Key('exam-prev'),
+                onPressed: s.isFirst ? null : () => onGoTo(s.index - 1),
+                icon: const Icon(Icons.chevron_left, size: 18),
+                label: const Text('Previous'),
+              )
+            else
+              IconButton.outlined(
+                key: const Key('exam-prev'),
+                tooltip: 'Previous',
+                onPressed: s.isFirst ? null : () => onGoTo(s.index - 1),
+                icon: const Icon(Icons.chevron_left),
               ),
-            const Spacer(),
+            Expanded(
+              child: sidePanel
+                  ? const SizedBox.shrink()
+                  : Center(
+                      child: TextButton.icon(
+                        key: const Key('exam-grid-button'),
+                        onPressed: onOpenGrid,
+                        icon: const Icon(Icons.grid_view_rounded, size: 18),
+                        label: Text(
+                          '${s.index + 1} / ${s.length}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+            ),
             if (s.isLast)
               FilledButton.tonal(
                 key: const Key('exam-finish'),
                 onPressed: onSubmit,
                 child: const Text('Finish'),
               )
-            else
+            else if (medium)
               FilledButton.tonalIcon(
                 key: const Key('exam-next'),
                 onPressed: () => onGoTo(s.index + 1),
                 iconAlignment: IconAlignment.end,
                 icon: const Icon(Icons.chevron_right, size: 18),
                 label: const Text('Next'),
+              )
+            else
+              IconButton.filledTonal(
+                key: const Key('exam-next'),
+                tooltip: 'Next',
+                onPressed: () => onGoTo(s.index + 1),
+                icon: const Icon(Icons.chevron_right),
               ),
           ],
         ),
@@ -906,8 +933,14 @@ class _ExamQuestion extends StatelessWidget {
       children: [
         Row(
           children: [
-            Text('Question ${s.index + 1} of ${s.length}', style: mono),
-            const Spacer(),
+            Expanded(
+              child: Text(
+                'Question ${s.index + 1} of ${s.length}',
+                style: mono,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             TextButton.icon(
               key: const Key('exam-flag'),
               style: TextButton.styleFrom(
@@ -915,7 +948,13 @@ class _ExamQuestion extends StatelessWidget {
               ),
               onPressed: onFlag,
               icon: Icon(flagged ? Icons.flag : Icons.outlined_flag, size: 18),
-              label: Text(flagged ? 'Flagged' : 'Flag for review'),
+              label: Text(
+                flagged
+                    ? 'Flagged'
+                    : showKeys
+                    ? 'Flag for review'
+                    : 'Flag',
+              ),
             ),
           ],
         ),
@@ -981,10 +1020,19 @@ class _ExamQuestion extends StatelessWidget {
 /// Numbered cells (answered = filled, flagged = flag mark, current =
 /// outlined) to jump between questions.
 class _QuestionGrid extends StatelessWidget {
-  const _QuestionGrid({required this.session, required this.onSelect});
+  const _QuestionGrid({
+    super.key,
+    required this.session,
+    required this.onSelect,
+    this.inPanel = false,
+  });
 
   final ExamSession session;
   final ValueChanged<int> onSelect;
+
+  /// In an adaptive panel (which shows the title): the cells scroll inside
+  /// the bounded height and the legend stays visible below them.
+  final bool inPanel;
 
   @override
   Widget build(BuildContext context) {
@@ -1002,27 +1050,37 @@ class _QuestionGrid extends StatelessWidget {
       ],
     );
 
+    final cells = Wrap(
+      spacing: Insets.sm,
+      runSpacing: Insets.sm,
+      children: [
+        for (var i = 0; i < s.length; i++)
+          _GridCell(
+            key: Key('exam-cell-$i'),
+            number: i + 1,
+            current: i == s.index,
+            answered: s.isAnswered(s.items[i].id),
+            flagged: s.isFlagged(s.items[i].id),
+            onTap: () => onSelect(i),
+          ),
+      ],
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('Questions', style: theme.textTheme.titleSmall),
-        Gaps.h12,
-        Wrap(
-          spacing: Insets.sm,
-          runSpacing: Insets.sm,
-          children: [
-            for (var i = 0; i < s.length; i++)
-              _GridCell(
-                key: Key('exam-cell-$i'),
-                number: i + 1,
-                current: i == s.index,
-                answered: s.isAnswered(s.items[i].id),
-                flagged: s.isFlagged(s.items[i].id),
-                onTap: () => onSelect(i),
-              ),
-          ],
-        ),
+        if (!inPanel) ...[
+          Text('Questions', style: theme.textTheme.titleSmall),
+          Gaps.h12,
+          cells,
+        ] else
+          Flexible(
+            child: SingleChildScrollView(
+              key: const Key('exam-grid-scroll'),
+              child: SizedBox(width: double.infinity, child: cells),
+            ),
+          ),
         Gaps.h16,
         Wrap(
           spacing: Insets.md,

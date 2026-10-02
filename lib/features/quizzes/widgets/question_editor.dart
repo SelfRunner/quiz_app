@@ -1,41 +1,44 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/adaptive_panel.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../../data/models/question.dart';
 import '../domain/question_rules.dart';
 import 'quiz_format.dart';
 
-/// Opens the question editor (dialog on wide screens, full screen on
-/// phones). Resolves to the edited, normalized question, or null when
-/// cancelled.
+/// Opens the question editor: full screen on phones, a dialog sized to the
+/// form (capped at 720 wide and 85% of the screen height, scrolling inside)
+/// on wider screens. Resolves to the edited, normalized question, or null
+/// when cancelled.
 Future<Question?> showQuestionEditor(
   BuildContext context, {
   required Question initial,
   bool isNew = false,
 }) {
-  final wide = isWide(context);
-  final editor = QuestionEditor(initial: initial, isNew: isNew);
-  return showDialog<Question>(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => wide
-        ? Dialog(
-            clipBehavior: Clip.antiAlias,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720, maxHeight: 860),
-              child: editor,
-            ),
-          )
-        : Dialog.fullscreen(child: editor),
+  final dialog = Breakpoints.isMedium(context);
+  return showAdaptiveEditor<Question>(
+    context,
+    builder: (_) =>
+        QuestionEditor(initial: initial, isNew: isNew, dialog: dialog),
   );
 }
 
 /// Per-type question form with inline validation. Pops the route with the
 /// normalized [Question] on save.
 class QuestionEditor extends StatefulWidget {
-  const QuestionEditor({super.key, required this.initial, this.isNew = false});
+  const QuestionEditor({
+    super.key,
+    required this.initial,
+    this.isNew = false,
+    this.dialog = false,
+  });
 
   final Question initial;
   final bool isNew;
+
+  /// Inside a dialog: no scaffold; the form shrink-wraps (scrolling when
+  /// taller than the dialog) under a header with Cancel / Done.
+  final bool dialog;
 
   @override
   State<QuestionEditor> createState() => _QuestionEditorState();
@@ -211,82 +214,128 @@ class _QuestionEditorState extends State<QuestionEditor> {
         ? validateQuestion(_current())
         : QuestionIssues.none;
     final theme = Theme.of(context);
+    final title = Text(widget.isNew ? 'New question' : 'Edit question');
+    final cancel = IconButton(
+      icon: const Icon(Icons.close),
+      tooltip: 'Cancel',
+      onPressed: _cancel,
+    );
+    final done = FilledButton(
+      key: const Key('question-editor-save'),
+      onPressed: _save,
+      child: const Text('Done'),
+    );
+    final fields = <Widget>[
+      Text('Type', style: theme.textTheme.labelLarge),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final t in QuestionType.values)
+            ChoiceChip(
+              avatar: Icon(questionTypeIcon(t), size: 18),
+              label: Text(questionTypeLabel(t)),
+              selected: _type == t,
+              showCheckmark: false,
+              onSelected: (_) => _changeType(t),
+            ),
+        ],
+      ),
+      const SizedBox(height: 20),
+      TextField(
+        key: const Key('question-prompt'),
+        controller: _prompt,
+        autofocus: widget.isNew,
+        minLines: 2,
+        maxLines: 6,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: InputDecoration(
+          labelText: _type == QuestionType.trueFalse ? 'Statement' : 'Question',
+          errorText: issues.prompt,
+        ),
+        onChanged: _revalidate,
+      ),
+      const SizedBox(height: 20),
+      ..._typeSection(issues, theme),
+      const SizedBox(height: 20),
+      TextField(
+        key: const Key('question-explanation'),
+        controller: _explanation,
+        minLines: 1,
+        maxLines: 5,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(
+          labelText: 'Explanation (optional)',
+          helperText: 'Shown after answering.',
+        ),
+      ),
+    ];
+
+    final Widget body;
+    if (widget.dialog) {
+      body = Material(
+        type: MaterialType.transparency,
+        child: Column(
+          key: const Key('question-editor-dialog'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
+              child: Row(
+                children: [
+                  cancel,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DefaultTextStyle.merge(
+                      style: theme.textTheme.titleLarge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      child: title,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  done,
+                ],
+              ),
+            ),
+            Divider(height: 1, color: theme.dividerColor),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: fields,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      body = Scaffold(
+        appBar: AppBar(
+          leading: cancel,
+          title: title,
+          actions: [
+            Padding(padding: const EdgeInsets.only(right: 12), child: done),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+          children: fields,
+        ),
+      );
+    }
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _cancel();
       },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.close),
-            tooltip: 'Cancel',
-            onPressed: _cancel,
-          ),
-          title: Text(widget.isNew ? 'New question' : 'Edit question'),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: FilledButton(
-                key: const Key('question-editor-save'),
-                onPressed: _save,
-                child: const Text('Done'),
-              ),
-            ),
-          ],
-        ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-          children: [
-            Text('Type', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final t in QuestionType.values)
-                  ChoiceChip(
-                    avatar: Icon(questionTypeIcon(t), size: 18),
-                    label: Text(questionTypeLabel(t)),
-                    selected: _type == t,
-                    showCheckmark: false,
-                    onSelected: (_) => _changeType(t),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              key: const Key('question-prompt'),
-              controller: _prompt,
-              autofocus: widget.isNew,
-              minLines: 2,
-              maxLines: 6,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(
-                labelText: _type == QuestionType.trueFalse
-                    ? 'Statement'
-                    : 'Question',
-                errorText: issues.prompt,
-              ),
-              onChanged: _revalidate,
-            ),
-            const SizedBox(height: 20),
-            ..._typeSection(issues, theme),
-            const SizedBox(height: 20),
-            TextField(
-              key: const Key('question-explanation'),
-              controller: _explanation,
-              minLines: 1,
-              maxLines: 5,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                labelText: 'Explanation (optional)',
-                helperText: 'Shown after answering.',
-              ),
-            ),
-          ],
-        ),
-      ),
+      child: body,
     );
   }
 

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../ai/llm_provider.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
+import '../../../core/widgets/error_message.dart';
 import '../../../core/widgets/export_menu.dart';
 import '../../../core/widgets/pin_button.dart';
 import '../../../core/widgets/tag_widgets.dart';
@@ -25,13 +26,65 @@ import '../widgets/quiz_format.dart';
 import '../widgets/score_trend.dart';
 import '../widgets/source_summary.dart';
 
+/// Below this width the detail app bar keeps only Share / Edit visible and
+/// moves the secondary actions (pin, export, tags, delete) into "More".
+const double _compactAppBarWidth = 600;
+
 /// Overview of one quiz: info, source, play, attempt history, owner actions.
-class QuizDetailScreen extends ConsumerWidget {
-  const QuizDetailScreen({super.key, required this.quizId});
+class QuizDetailScreen extends ConsumerStatefulWidget {
+  const QuizDetailScreen({
+    super.key,
+    required this.quizId,
+    this.justCreated = false,
+  });
 
   final String quizId;
 
-  Future<void> _delete(BuildContext context, WidgetRef ref, Quiz quiz) async {
+  /// The quiz was just saved (e.g. AI generation): show a "Quiz saved"
+  /// snackbar with an "Edit" action once it has loaded.
+  final bool justCreated;
+
+  /// Key of the labelled "Edit questions" button next to Play.
+  static const Key editButtonKey = Key('edit-questions');
+
+  @override
+  ConsumerState<QuizDetailScreen> createState() => _QuizDetailScreenState();
+}
+
+class _QuizDetailScreenState extends ConsumerState<QuizDetailScreen> {
+  bool _savedNoticeShown = false;
+
+  String get quizId => widget.quizId;
+
+  void _edit() => context.push(AppRoutes.quizEdit(quizId));
+
+  void _maybeShowSavedNotice(Quiz? quiz, bool owner) {
+    if (!widget.justCreated || _savedNoticeShown || quiz == null) return;
+    _savedNoticeShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            key: const Key('quiz-saved-snack'),
+            content: const Text('Quiz saved'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+            persist: false,
+            action: owner
+                ? SnackBarAction(
+                    key: const Key('quiz-saved-edit'),
+                    label: 'Edit',
+                    onPressed: _edit,
+                  )
+                : null,
+          ),
+        );
+    });
+  }
+
+  Future<void> _delete(Quiz quiz) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -52,26 +105,143 @@ class QuizDetailScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true || !context.mounted) return;
+    if (ok != true || !mounted) return;
     try {
       await ref.read(quizRepositoryProvider).delete(quiz.id);
-      if (!context.mounted) return;
+      if (!mounted) return;
       if (context.canPop()) {
         context.pop();
       } else {
         context.go(AppRoutes.subject(quiz.subjectId));
       }
     } on Object catch (e) {
-      if (context.mounted) showSnack(context, errorText(e));
+      if (mounted) showSnack(context, errorText(e));
     }
   }
 
+  Future<void> _setPinned(Quiz quiz, bool pinned) async {
+    try {
+      await ref
+          .read(organizationRepositoryProvider)
+          .setPinned(TaggableKind.quiz, quiz.id, pinned);
+    } on Object catch (e) {
+      if (mounted) showErrorSnackBar(context, e);
+    }
+  }
+
+  List<Widget> _ownerActions(Quiz quiz, {required bool compact}) {
+    final exports = quizExportItems(quiz);
+    return [
+      if (!compact)
+        PinButton.item(
+          kind: TaggableKind.quiz,
+          id: quiz.id,
+          pinned: quiz.pinned,
+        ),
+      IconButton(
+        tooltip: 'Share',
+        icon: const Icon(Icons.ios_share_outlined),
+        onPressed: () => showShareSheet(
+          context,
+          type: ShareResourceType.quiz,
+          resourceId: quiz.id,
+          title: quiz.title,
+        ),
+      ),
+      IconButton(
+        key: const Key('quiz-edit-action'),
+        tooltip: 'Edit quiz',
+        icon: const Icon(Icons.edit_outlined),
+        onPressed: _edit,
+      ),
+      if (!compact) ExportMenu(items: exports),
+      PopupMenuButton<String>(
+        key: const Key('quiz-more'),
+        tooltip: 'More',
+        icon: const Icon(Icons.more_horiz),
+        onSelected: (v) {
+          switch (v) {
+            case 'edit':
+              _edit();
+            case 'pin':
+              _setPinned(quiz, !quiz.pinned);
+            case 'tags':
+              editItemTags(
+                context,
+                ref,
+                kind: TaggableKind.quiz,
+                id: quiz.id,
+                tags: quiz.tags,
+              );
+            case 'delete':
+              _delete(quiz);
+            default:
+              if (v.startsWith('export:')) {
+                final i = int.parse(v.substring('export:'.length));
+                runExport(context, ref, exports[i]);
+              }
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+            key: Key('quiz-more-edit'),
+            value: 'edit',
+            child: ListTile(
+              leading: Icon(Icons.edit_outlined),
+              title: Text('Edit quiz'),
+            ),
+          ),
+          if (compact) ...[
+            PopupMenuItem(
+              key: const Key('quiz-more-pin'),
+              value: 'pin',
+              child: ListTile(
+                leading: Icon(
+                  quiz.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                ),
+                title: Text(quiz.pinned ? 'Unpin' : 'Pin'),
+              ),
+            ),
+            for (final (i, item) in exports.indexed)
+              PopupMenuItem(
+                key: item.key,
+                value: 'export:$i',
+                child: ListTile(
+                  leading: Icon(item.icon ?? Icons.file_download_outlined),
+                  title: Text('Export ${item.label}'),
+                ),
+              ),
+          ],
+          const PopupMenuItem(
+            key: Key('quiz-edit-tags'),
+            value: 'tags',
+            child: ListTile(
+              leading: Icon(Icons.sell_outlined),
+              title: Text('Edit tags'),
+            ),
+          ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: 'delete',
+            child: ListTile(
+              leading: Icon(Icons.delete_outline),
+              title: Text('Delete quiz'),
+            ),
+          ),
+        ],
+      ),
+      Gaps.w8,
+    ];
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final quizAsync = ref.watch(quizProvider(quizId));
     final userId = ref.watch(currentUserIdProvider);
     final quiz = quizAsync.value;
     final owner = quiz != null && quiz.isOwnedBy(userId);
+    final compact = MediaQuery.sizeOf(context).width < _compactAppBarWidth;
+    _maybeShowSavedNotice(quiz, owner);
 
     return Scaffold(
       appBar: AppBar(
@@ -81,64 +251,9 @@ class QuizDetailScreen extends ConsumerWidget {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (quiz != null && owner) ...[
-            PinButton.item(
-              kind: TaggableKind.quiz,
-              id: quiz.id,
-              pinned: quiz.pinned,
-            ),
-            IconButton(
-              tooltip: 'Share',
-              icon: const Icon(Icons.ios_share_outlined),
-              onPressed: () => showShareSheet(
-                context,
-                type: ShareResourceType.quiz,
-                resourceId: quiz.id,
-                title: quiz.title,
-              ),
-            ),
-            IconButton(
-              tooltip: 'Edit',
-              icon: const Icon(Icons.edit_outlined),
-              onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
-            ),
-            ExportMenu(items: quizExportItems(quiz)),
-            PopupMenuButton<String>(
-              key: const Key('quiz-more'),
-              tooltip: 'More',
-              icon: const Icon(Icons.more_horiz),
-              onSelected: (v) => switch (v) {
-                'tags' => editItemTags(
-                  context,
-                  ref,
-                  kind: TaggableKind.quiz,
-                  id: quiz.id,
-                  tags: quiz.tags,
-                ),
-                'delete' => _delete(context, ref, quiz),
-                _ => null,
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  key: Key('quiz-edit-tags'),
-                  value: 'tags',
-                  child: ListTile(
-                    leading: Icon(Icons.sell_outlined),
-                    title: Text('Edit tags'),
-                  ),
-                ),
-                PopupMenuDivider(),
-                PopupMenuItem(
-                  value: 'delete',
-                  child: ListTile(
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('Delete quiz'),
-                  ),
-                ),
-              ],
-            ),
-            Gaps.w8,
-          ] else if (quiz != null) ...[
+          if (quiz != null && owner)
+            ..._ownerActions(quiz, compact: compact)
+          else if (quiz != null) ...[
             ExportMenu(items: quizExportItems(quiz)),
             Padding(
               padding: const EdgeInsets.only(right: Insets.sm),
@@ -567,7 +682,8 @@ class _HistorySection extends StatelessWidget {
   }
 }
 
-/// Play, Exam (setup dialog) and "Practice mistakes (N)".
+/// Play, "Edit questions" (owner), Exam (setup dialog) and
+/// "Practice mistakes (N)".
 class _PlayActions extends ConsumerWidget {
   const _PlayActions({required this.quiz, required this.owner});
 
@@ -591,43 +707,75 @@ class _PlayActions extends ConsumerWidget {
     final mistakes = groups
         .where((g) => g.quiz.id == quiz.id)
         .fold<int>(0, (n, g) => n + g.entries.length);
-    return Wrap(
+    final play = FilledButton.icon(
+      key: const Key('play-quiz'),
+      style: FilledButton.styleFrom(minimumSize: const Size(140, 44)),
+      onPressed: count == 0
+          ? null
+          : () => context.push(AppRoutes.quizPlay(quiz.id)),
+      icon: const Icon(Icons.play_arrow_rounded),
+      label: const Text('Play'),
+    );
+    final edit = owner
+        ? FilledButton.tonalIcon(
+            key: QuizDetailScreen.editButtonKey,
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: Text(
+              count == 0 ? 'Add questions' : 'Edit questions',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          )
+        : null;
+    final rest = [
+      OutlinedButton.icon(
+        key: const Key('exam-quiz'),
+        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+        onPressed: count == 0 ? null : () => _startExam(context, ref),
+        icon: const Icon(Icons.timer_outlined, size: 18),
+        label: const Text('Exam'),
+      ),
+      if (mistakes > 0)
+        OutlinedButton.icon(
+          key: const Key('practice-mistakes'),
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+          onPressed: () =>
+              context.push(AppRoutes.quizPlay(quiz.id, mode: 'mistakes')),
+          icon: const Icon(Icons.replay_circle_filled_outlined, size: 18),
+          label: Text('Practice mistakes ($mistakes)'),
+        ),
+    ];
+    Wrap wrap(List<Widget> children) => Wrap(
       spacing: Insets.sm,
       runSpacing: Insets.sm,
       crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        FilledButton.icon(
-          key: const Key('play-quiz'),
-          style: FilledButton.styleFrom(minimumSize: const Size(140, 44)),
-          onPressed: count == 0
-              ? null
-              : () => context.push(AppRoutes.quizPlay(quiz.id)),
-          icon: const Icon(Icons.play_arrow_rounded),
-          label: const Text('Play'),
-        ),
-        FilledButton.tonalIcon(
-          key: const Key('exam-quiz'),
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-          onPressed: count == 0 ? null : () => _startExam(context, ref),
-          icon: const Icon(Icons.timer_outlined, size: 18),
-          label: const Text('Exam'),
-        ),
-        if (mistakes > 0)
-          OutlinedButton.icon(
-            key: const Key('practice-mistakes'),
-            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
-            onPressed: () =>
-                context.push(AppRoutes.quizPlay(quiz.id, mode: 'mistakes')),
-            icon: const Icon(Icons.replay_circle_filled_outlined, size: 18),
-            label: Text('Practice mistakes ($mistakes)'),
-          ),
-        if (count == 0 && owner)
-          OutlinedButton.icon(
-            onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Edit questions'),
-          ),
-      ],
+      children: children,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Phones: Play and Edit share the first row, so editing is never
+        // pushed below the fold by the other actions.
+        if (edit == null || constraints.maxWidth >= 480) {
+          return wrap([play, ?edit, ...rest]);
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(child: play),
+                Gaps.w8,
+                Expanded(child: edit),
+              ],
+            ),
+            Gaps.h8,
+            wrap(rest),
+          ],
+        );
+      },
     );
   }
 }

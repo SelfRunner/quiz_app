@@ -63,29 +63,21 @@ class ExplainButton extends StatelessWidget {
   }
 }
 
-/// Bottom sheet with the AI explanation of [target] (loading, error with
-/// retry, Markdown and source chips that open the cited notes).
+/// The AI explanation of [target] (loading, error with retry, Markdown and
+/// source chips that open the cited notes) in an adaptive panel: a
+/// content-height bottom sheet on phones, a dialog up to 640 wide and 80%
+/// of the screen height elsewhere. Long explanations scroll inside.
 Future<void> showExplainSheet(BuildContext context, ExplainTarget target) {
-  return showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    useSafeArea: true,
-    constraints: const BoxConstraints(maxWidth: ContentWidth.readable),
-    builder: (sheetContext) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      minChildSize: 0.3,
-      maxChildSize: 0.95,
-      builder: (context, controller) => ExplainPanel(
-        target: target,
-        scrollController: controller,
-        onOpenNote: (id) {
-          final router = GoRouter.of(context);
-          Navigator.of(sheetContext).pop();
-          router.push(AppRoutes.note(id));
-        },
-      ),
+  final router = GoRouter.of(context);
+  return showAdaptivePanel<void>(
+    context,
+    maxWidth: 640,
+    builder: (panelContext) => ExplainPanel(
+      target: target,
+      onOpenNote: (id) {
+        Navigator.of(panelContext).pop();
+        router.push(AppRoutes.note(id));
+      },
     ),
   );
 }
@@ -240,10 +232,12 @@ class _ExplainPanelState extends ConsumerState<ExplainPanel> {
           ]);
         }
         return ListView(
+          key: const Key('explain-panel'),
           controller: widget.scrollController,
-          padding: const EdgeInsets.fromLTRB(
+          shrinkWrap: widget.scrollController == null,
+          padding: EdgeInsets.fromLTRB(
             Insets.xl,
-            0,
+            Breakpoints.isMedium(context) ? Insets.xl : 0,
             Insets.xl,
             Insets.xl,
           ),

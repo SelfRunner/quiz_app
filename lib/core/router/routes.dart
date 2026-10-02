@@ -21,8 +21,13 @@ abstract final class AppRoutes {
   static String subject(String id) => '/subjects/$id';
   static String note(String id) => '/notes/$id';
   static String noteEdit(String id) => '/notes/$id/edit';
-  static String quiz(String id) => '/quizzes/$id';
+
+  /// `justCreated`: the quiz was just saved (e.g. from AI generation); the
+  /// detail screen confirms it and offers "Edit".
+  static String quiz(String id, {bool justCreated = false}) =>
+      justCreated ? '/quizzes/$id?justCreated=1' : '/quizzes/$id';
   static String quizEdit(String id) => '/quizzes/$id/edit';
+
   /// `mode`: null/practice, `exam` (time limit + pool, feedback at end) or
   /// `mistakes` (only open mistakes of this quiz).
   static String quizPlay(String id, {String? mode}) =>
