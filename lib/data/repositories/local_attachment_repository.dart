@@ -186,7 +186,8 @@ class LocalAttachmentRepository implements AttachmentRepository {
           'Your session has expired. Please sign in again.',
           cause: e,
         ),
-        RemoteErrorKind.transient => UnknownException(
+        RemoteErrorKind.transient ||
+        RemoteErrorKind.schemaOutdated => UnknownException(
           'Could not download the file. Please try again.',
           cause: e,
         ),

@@ -235,6 +235,12 @@ AppException remoteToAppException(RemoteException e) {
         return ValidationException(e.message, cause: e);
       }
       return ValidationException('The server rejected the request.', cause: e);
+    case RemoteErrorKind.schemaOutdated:
+      return UnknownException(
+        'The server database needs an update (run the latest Supabase '
+        'migration).',
+        cause: e,
+      );
     case RemoteErrorKind.transient:
       return UnknownException(
         'Something went wrong on the server. Please try again.',

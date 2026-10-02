@@ -37,13 +37,22 @@ class SyncRejection {
 /// - permanent error (RLS 42501, constraint, 4xx): op dropped, the server
 ///   version of the row (if visible) replaces the local one, the rejection is
 ///   reported via [rejections] and `SyncStatus.error`. The queue never blocks.
+/// - server schema out of date (`RemoteErrorKind.schemaOutdated`: PGRST204
+///   missing column, PGRST205 missing table, PGRST202 missing function,
+///   42703/42P01/42883): **never dropped**, no attempt counted; the op and
+///   every later op of the same table stay queued (per-row order kept) while
+///   other tables keep syncing. Reported as `SyncStatus.serverOutdated` +
+///   `unavailableTables`; retried with capped backoff until the migration
+///   has been applied.
 /// - transient error (5xx, unknown): `attempts++`, retried with capped
 ///   exponential backoff, **never dropped** (an outage must not lose data).
 ///   Ops with `attempts >= maxAttempts` are reported as `SyncStatus.stuckOps`.
-/// - rejected upserts keep the user's row JSON in `sync_meta`
-///   ([rejectedChanges]) until [dismissRejectedChange].
+/// - every dropped op is recorded in `sync_meta` ([rejectedChanges], with
+///   the row JSON for upserts) until [dismissRejectedChange], and counted in
+///   `SyncStatus.rejectedChanges`.
 ///
-/// **Pull**: per table, keyset pages of `(updated_at, id) > cursor` ordered
+/// **Pull**: per table (isolated: a table the server lacks or fails on does
+/// not stop the others; it is retried on the next sync), keyset pages of `(updated_at, id) > cursor` ordered
 /// ascending. The cursor is the max server `updated_at` (raw string) seen, so
 /// the client clock is never involved; each sync re-reads a short
 /// [pullLookback] window to catch rows committed late by long transactions.
@@ -136,6 +145,9 @@ class DefaultSyncEngine implements SyncEngine {
   Timer? _periodic;
   Timer? _debounce;
   Timer? _retry;
+
+  /// Tables / buckets the server schema could not serve in this cycle.
+  final Set<String> _outdated = {};
 
   /// Server rejections (dropped ops), for UI snackbars / diagnostics.
   Stream<SyncRejection> get rejections => _rejections.stream;
@@ -385,17 +397,23 @@ class DefaultSyncEngine implements SyncEngine {
     _online = true;
     _emit(_status.copyWith(state: SyncState.syncing));
     final problems = <String>[];
+    _outdated.clear();
     try {
       await _ensureUserScope(userId);
       _checkActive(gen);
-      final retryLater = await _push(gen, problems);
+      var retryLater = await _push(gen, problems);
       await _runImageCopies(gen, problems);
       final initialPull = db.tables.any((t) => db.meta.cursor(t.name) == null);
-      await _pull(userId, gen);
+      if (await _pull(userId, gen, problems)) retryLater = true;
       await _syncShares(userId, gen, problems, initialPull: initialPull);
       _checkActive(gen);
       final now = _clock();
       await db.meta.setLastSyncedAt(now);
+      final unavailable = _outdated.toList()..sort();
+      if (unavailable.isNotEmpty) {
+        problems.insert(0, serverOutdatedMessage);
+        retryLater = true;
+      }
       if (retryLater) {
         _scheduleRetry();
       } else {
@@ -415,6 +433,8 @@ class DefaultSyncEngine implements SyncEngine {
           lastSyncedAt: now,
           error: problems.isEmpty ? null : problems.join('\n'),
           stuckOps: stuck,
+          serverOutdated: unavailable.isNotEmpty,
+          unavailableTables: unavailable,
         ),
       );
     } on _Aborted {
@@ -432,6 +452,16 @@ class DefaultSyncEngine implements SyncEngine {
               error: 'Your session has expired. Please sign in again.',
             ),
           );
+        case RemoteErrorKind.schemaOutdated:
+          _emit(
+            _status.copyWith(
+              state: SyncState.error,
+              error: serverOutdatedMessage,
+              serverOutdated: true,
+              unavailableTables: _outdated.toList()..sort(),
+            ),
+          );
+          _scheduleRetry();
         case _:
           _emit(
             _status.copyWith(
@@ -468,6 +498,12 @@ class DefaultSyncEngine implements SyncEngine {
       var progressed = false;
       for (final op in queue) {
         _checkActive(gen);
+        if (_outdated.contains(op.table)) {
+          // The server can't take this table yet: keep the op (and the
+          // order of the row's ops) queued; unrelated tables continue.
+          retryLater = true;
+          continue;
+        }
         try {
           await _pushOp(op, gen);
           progressed = true;
@@ -488,12 +524,18 @@ class DefaultSyncEngine implements SyncEngine {
               rethrow;
             case RemoteErrorKind.dependency:
               deferred.add(op);
+            case RemoteErrorKind.schemaOutdated:
+              // Server one migration behind (missing column/table/function):
+              // not the change's fault. Never drop, never count an attempt.
+              _outdated.add(op.table);
+              await db.outbox.noteError(op, e.message);
+              retryLater = true;
             case RemoteErrorKind.permanent
                 when _isPrivateStudyUpsert(op) && e.code == '42501':
               // Deck/quiz no longer readable (share revoked, deleted): the
-              // review/mistake can't be saved. Drop it quietly.
-              _checkActive(gen);
-              await db.outbox.drop(op.id);
+              // review/mistake can't be saved. Dropped without an error
+              // state, but still recorded (and counted) as rejected.
+              await _reject(op, e, gen, problems, quiet: true);
               progressed = true;
             case RemoteErrorKind.permanent:
             case RemoteErrorKind.conflict:
@@ -672,12 +714,16 @@ class DefaultSyncEngine implements SyncEngine {
     }
   }
 
+  /// Drops [op] after a permanent failure. Every dropped op is recorded in
+  /// [rejectedChanges] (counted in `SyncStatus.rejectedChanges`); [quiet]
+  /// skips the error state and the [rejections] event.
   Future<void> _reject(
     OutboxOp op,
     RemoteException e,
     int gen,
-    List<String> problems,
-  ) async {
+    List<String> problems, {
+    bool quiet = false,
+  }) async {
     _checkActive(gen);
     await db.outbox.drop(op.id);
     final what = switch (op.op) {
@@ -697,24 +743,30 @@ class DefaultSyncEngine implements SyncEngine {
       },
     };
     final message = 'The server rejected a change to $what: ${e.message}';
-    problems.add(message);
     final at = _clock();
-    if (!_rejections.isClosed) {
-      _rejections.add(SyncRejection(op: op, message: message, at: at));
+    if (!quiet) {
+      problems.add(message);
+      if (!_rejections.isClosed) {
+        _rejections.add(SyncRejection(op: op, message: message, at: at));
+      }
     }
-    if (op.op == OutboxOpType.upsert && SyncTables.synced.contains(op.table)) {
-      // Keep the user's version before the server's replaces it locally.
-      await db.meta.addRejectedChange(
-        RejectedChange(
-          id: op.id,
-          table: op.table,
-          rowId: op.rowId,
-          payload: op.payload,
-          message: message,
-          at: at,
-        ),
-      );
-      _rejectedCount = db.meta.rejectedChanges.length;
+    // Keep the user's version (row JSON / file op) before the server's
+    // replaces it locally: no op is ever dropped without a trace.
+    await db.meta.addRejectedChange(
+      RejectedChange(
+        id: op.id,
+        table: op.table,
+        rowId: op.rowId,
+        op: op.toJson()['op'] as String,
+        payload: op.payload,
+        message: message,
+        at: at,
+      ),
+    );
+    _rejectedCount = db.meta.rejectedChanges.length;
+    if (!quiet &&
+        op.op == OutboxOpType.upsert &&
+        SyncTables.synced.contains(op.table)) {
       // Restore the server's version so local state does not silently
       // diverge (if the row is not visible, the local copy is kept).
       try {
@@ -736,6 +788,10 @@ class DefaultSyncEngine implements SyncEngine {
       if (e.kind == RemoteErrorKind.network || e.kind == RemoteErrorKind.auth) {
         rethrow;
       }
+      if (e.kind == RemoteErrorKind.schemaOutdated) {
+        _outdated.add('note_image_copies');
+        return;
+      }
       problems.add('Could not copy images of copied notes: ${e.message}');
     }
   }
@@ -744,41 +800,68 @@ class DefaultSyncEngine implements SyncEngine {
   // Pull
   // -------------------------------------------------------------------------
 
-  Future<void> _pull(String userId, int gen) async {
+  /// Pulls every table. A table that fails with a non-network error is
+  /// skipped (the others still sync) and retried on the next cycle: schema
+  /// errors mark it unavailable, other errors are reported in [problems].
+  /// Returns true when a table should be retried soon.
+  Future<bool> _pull(String userId, int gen, List<String> problems) async {
+    var retryLater = false;
     for (final table in db.tables) {
-      var cursor = db.meta.cursor(table.name);
-      PullCursor? after = cursor == null
-          ? null
-          : PullCursor(
-              updatedAt: cursor.updatedAtTime
-                  .subtract(pullLookback)
-                  .toUtc()
-                  .toIso8601String(),
-              id: PullCursor.minId,
-            );
-      while (true) {
-        _checkActive(gen);
-        final page = await remote.pullPage(
-          table.name,
-          after: after,
-          limit: pageSize,
-        );
-        if (page.isEmpty) break;
-        _checkActive(gen);
-        await _writeServerRows(table, page, userId, gen);
-        final last = page.last;
-        final next = PullCursor(
-          updatedAt: last['updated_at'] as String,
-          id: last['id'] as String,
-        );
-        after = next;
-        if (cursor == null ||
-            !next.updatedAtTime.isBefore(cursor.updatedAtTime)) {
-          cursor = next;
-          await db.meta.setCursor(table.name, next);
+      try {
+        await _pullTable(table, userId, gen);
+      } on RemoteException catch (e) {
+        switch (e.kind) {
+          case RemoteErrorKind.network:
+          case RemoteErrorKind.auth:
+            rethrow;
+          case RemoteErrorKind.schemaOutdated:
+            _outdated.add(table.name);
+          case _:
+            problems.add('Could not download ${table.name}: ${e.message}');
+            retryLater = true;
         }
-        if (page.length < pageSize) break;
       }
+    }
+    return retryLater;
+  }
+
+  Future<void> _pullTable(
+    LocalTable<Syncable> table,
+    String userId,
+    int gen,
+  ) async {
+    var cursor = db.meta.cursor(table.name);
+    PullCursor? after = cursor == null
+        ? null
+        : PullCursor(
+            updatedAt: cursor.updatedAtTime
+                .subtract(pullLookback)
+                .toUtc()
+                .toIso8601String(),
+            id: PullCursor.minId,
+          );
+    while (true) {
+      _checkActive(gen);
+      final page = await remote.pullPage(
+        table.name,
+        after: after,
+        limit: pageSize,
+      );
+      if (page.isEmpty) break;
+      _checkActive(gen);
+      await _writeServerRows(table, page, userId, gen);
+      final last = page.last;
+      final next = PullCursor(
+        updatedAt: last['updated_at'] as String,
+        id: last['id'] as String,
+      );
+      after = next;
+      if (cursor == null ||
+          !next.updatedAtTime.isBefore(cursor.updatedAtTime)) {
+        cursor = next;
+        await db.meta.setCursor(table.name, next);
+      }
+      if (page.length < pageSize) break;
     }
   }
 
@@ -856,7 +939,11 @@ class DefaultSyncEngine implements SyncEngine {
       if (e.kind == RemoteErrorKind.network || e.kind == RemoteErrorKind.auth) {
         rethrow;
       }
-      problems.add('Could not check shared items: ${e.message}');
+      if (e.kind == RemoteErrorKind.schemaOutdated) {
+        _outdated.add(SyncTables.shares);
+      } else {
+        problems.add('Could not check shared items: ${e.message}');
+      }
       return;
     }
     _checkActive(gen);
@@ -867,9 +954,15 @@ class DefaultSyncEngine implements SyncEngine {
         : keys.difference(previous);
     final revoked = previous == null ? <String>{} : previous.difference(keys);
 
+    // New shares whose backfill hit a table the server lacks: not
+    // remembered, so they are backfilled again once it has been migrated.
+    final incomplete = <String>{};
     for (final share in incoming) {
-      if (!added.contains(_shareKey(share.type, share.resourceId))) continue;
-      await _backfillShare(share.type, share.resourceId, userId, gen);
+      final key = _shareKey(share.type, share.resourceId);
+      if (!added.contains(key)) continue;
+      if (!await _backfillShare(share.type, share.resourceId, userId, gen)) {
+        incomplete.add(key);
+      }
     }
 
     final lastReconciled = db.meta.lastReconciledAt;
@@ -880,27 +973,48 @@ class DefaultSyncEngine implements SyncEngine {
       await reconcileForeignRows(userId: userId, gen: gen);
     }
     _checkActive(gen);
-    await db.meta.setIncomingShareKeys(keys);
+    await db.meta.setIncomingShareKeys(keys.difference(incomplete));
   }
 
   static String _shareKey(ShareResourceType type, String id) =>
       '${type.wireName}:$id';
 
-  Future<void> _backfillShare(
+  /// Returns false when part of the tree could not be fetched because the
+  /// server schema is out of date (the share is then backfilled again).
+  Future<bool> _backfillShare(
     ShareResourceType type,
     String id,
     String userId,
     int gen,
   ) async {
-    Future<void> byId(LocalTable<Syncable> table) async {
-      final row = await remote.fetchById(table.name, id);
-      if (row != null) await _writeServerRows(table, [row], userId, gen);
+    var complete = true;
+    Future<void> guarded(String table, Future<void> Function() body) async {
+      if (_outdated.contains(table)) {
+        complete = false;
+        return;
+      }
+      try {
+        await body();
+      } on RemoteException catch (e) {
+        if (e.kind != RemoteErrorKind.schemaOutdated) rethrow;
+        _outdated.add(table);
+        complete = false;
+      }
     }
 
-    Future<void> where(LocalTable<Syncable> table, String column) async {
-      final rows = await remote.fetchWhere(table.name, column, id);
-      if (rows.isNotEmpty) await _writeServerRows(table, rows, userId, gen);
-    }
+    Future<void> byId(LocalTable<Syncable> table) =>
+        guarded(table.name, () async {
+          final row = await remote.fetchById(table.name, id);
+          if (row != null) await _writeServerRows(table, [row], userId, gen);
+        });
+
+    Future<void> where(LocalTable<Syncable> table, String column) =>
+        guarded(table.name, () async {
+          final rows = await remote.fetchWhere(table.name, column, id);
+          if (rows.isNotEmpty) {
+            await _writeServerRows(table, rows, userId, gen);
+          }
+        });
 
     switch (type) {
       case ShareResourceType.subject:
@@ -918,13 +1032,18 @@ class DefaultSyncEngine implements SyncEngine {
       case ShareResourceType.deck:
         await byId(db.decks);
     }
+    return complete;
   }
 
   /// Purges locally cached rows owned by other users that the server no
   /// longer returns (share revoked, item moved out of a shared subject,
   /// tombstone hidden by RLS). Public for tests and manual refresh.
+  ///
+  /// Tables the server schema cannot serve are skipped (nothing is purged
+  /// on a failed check) and the next sync reconciles again.
   Future<void> reconcileForeignRows({required String userId, int? gen}) async {
     final g = gen ?? _generation;
+    var complete = true;
     for (final table in [
       db.subjects,
       db.notes,
@@ -932,70 +1051,119 @@ class DefaultSyncEngine implements SyncEngine {
       db.attachments,
       db.decks,
     ]) {
-      final foreign = [
-        for (final row in table.all())
-          if (!row.isOwnedBy(userId)) row,
-      ];
-      for (var i = 0; i < foreign.length; i += _idChunk) {
-        final chunk = foreign.sublist(
-          i,
-          math.min(i + _idChunk, foreign.length),
-        );
-        _checkActive(g);
-        final visible = await remote.fetchVisibleIds(table.name, [
-          for (final r in chunk) r.id,
-        ]);
-        _checkActive(g);
-        final gone = [
-          for (final r in chunk)
-            if (!visible.contains(r.id)) r,
-        ];
-        if (gone.isEmpty) continue;
-        await table.removeAll(gone.map((r) => r.id));
-        if (table.name == SyncTables.notes) {
-          for (final note in gone) {
-            await db.images.removePrefix('${note.ownerId}/${note.id}/');
-          }
-        }
-        await _removeBlobs([
-          for (final r in gone)
-            if (r is Attachment) r.storagePath,
-        ]);
+      if (_outdated.contains(table.name)) {
+        complete = false;
+        continue;
+      }
+      try {
+        await _reconcileTable(table, userId, g);
+      } on RemoteException catch (e) {
+        if (e.kind != RemoteErrorKind.schemaOutdated) rethrow;
+        _outdated.add(table.name);
+        complete = false;
       }
     }
-    await _purgeOrphanStudyRows(g);
-    await db.meta.setLastReconciledAt(_clock());
+    if (!await _purgeOrphanStudyRows(g)) complete = false;
+    if (complete) {
+      await db.meta.setLastReconciledAt(_clock());
+    } else {
+      await db.meta.resetLastReconciledAt();
+    }
+  }
+
+  Future<void> _reconcileTable(
+    LocalTable<Syncable> table,
+    String userId,
+    int g,
+  ) async {
+    final foreign = [
+      for (final row in table.all())
+        if (!row.isOwnedBy(userId)) row,
+    ];
+    for (var i = 0; i < foreign.length; i += _idChunk) {
+      final chunk = foreign.sublist(i, math.min(i + _idChunk, foreign.length));
+      _checkActive(g);
+      final visible = await remote.fetchVisibleIds(table.name, [
+        for (final r in chunk) r.id,
+      ]);
+      _checkActive(g);
+      final gone = [
+        for (final r in chunk)
+          if (!visible.contains(r.id)) r,
+      ];
+      if (gone.isEmpty) continue;
+      await table.removeAll(gone.map((r) => r.id));
+      if (table.name == SyncTables.notes) {
+        for (final note in gone) {
+          await db.images.removePrefix('${note.ownerId}/${note.id}/');
+        }
+      }
+      await _removeBlobs([
+        for (final r in gone)
+          if (r is Attachment) r.storagePath,
+      ]);
+    }
   }
 
   /// Own `card_reviews` / `mistakes` whose deck / quiz is not cached are
   /// kept (hidden) while the server still has them (access revoked: the
   /// server keeps them), and purged when the server no longer returns them
-  /// (parent hard-deleted: rows cascaded without tombstones).
-  Future<void> _purgeOrphanStudyRows(int gen) async {
+  /// (parent hard-deleted: rows cascaded without tombstones). Skipped while
+  /// the study table or its parent table is unavailable on the server.
+  /// Returns false when something was skipped.
+  Future<bool> _purgeOrphanStudyRows(int gen) async {
+    var complete = true;
     Future<void> purge<T extends Syncable>(
       LocalTable<T> table,
+      String parentTable,
       bool Function(T row) orphan,
     ) async {
-      final candidates = [
-        for (final row in table.all())
-          if (orphan(row) && !db.outbox.hasPendingFor(table.name, row.id))
-            row.id,
-      ];
-      for (var i = 0; i < candidates.length; i += _idChunk) {
-        final chunk = candidates.sublist(
-          i,
-          math.min(i + _idChunk, candidates.length),
-        );
-        _checkActive(gen);
-        final visible = await remote.fetchVisibleIds(table.name, chunk);
-        _checkActive(gen);
-        final gone = chunk.where((id) => !visible.contains(id)).toList();
-        if (gone.isNotEmpty) await table.removeAll(gone);
+      if (_outdated.contains(table.name) || _outdated.contains(parentTable)) {
+        complete = false;
+        return;
+      }
+      try {
+        await _purgeOrphans(table, orphan, gen);
+      } on RemoteException catch (e) {
+        if (e.kind != RemoteErrorKind.schemaOutdated) rethrow;
+        _outdated.add(table.name);
+        complete = false;
       }
     }
 
-    await purge<CardReview>(db.reviews, (r) => db.decks.raw(r.deckId) == null);
-    await purge<Mistake>(db.mistakes, (m) => db.quizzes.raw(m.quizId) == null);
+    await purge<CardReview>(
+      db.reviews,
+      SyncTables.decks,
+      (r) => db.decks.raw(r.deckId) == null,
+    );
+    await purge<Mistake>(
+      db.mistakes,
+      SyncTables.quizzes,
+      (m) => db.quizzes.raw(m.quizId) == null,
+    );
+    return complete;
+  }
+
+  Future<void> _purgeOrphans<T extends Syncable>(
+    LocalTable<T> table,
+    bool Function(T row) orphan,
+    int gen,
+  ) async {
+    final candidates = [
+      for (final row in table.all())
+        if (orphan(row) && !db.outbox.hasPendingFor(table.name, row.id)) row.id,
+    ];
+    for (var i = 0; i < candidates.length; i += _idChunk) {
+      final chunk = candidates.sublist(
+        i,
+        math.min(i + _idChunk, candidates.length),
+      );
+      _checkActive(gen);
+      final visible = await remote.fetchVisibleIds(table.name, chunk);
+      _checkActive(gen);
+      final gone = chunk.where((id) => !visible.contains(id)).toList();
+      if (gone.isNotEmpty) await table.removeAll(gone);
+    }
   }
 
   // -------------------------------------------------------------------------

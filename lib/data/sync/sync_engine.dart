@@ -4,6 +4,11 @@ part 'sync_engine.freezed.dart';
 
 enum SyncState { idle, syncing, offline, error }
 
+/// User-facing explanation shown when [SyncStatus.serverOutdated] is set.
+const String serverOutdatedMessage =
+    'The server database needs an update (run the latest Supabase '
+    'migration). Your changes are kept on this device.';
+
 @freezed
 abstract class SyncStatus with _$SyncStatus {
   const factory SyncStatus({
@@ -24,6 +29,18 @@ abstract class SyncStatus with _$SyncStatus {
     /// Changes the server rejected permanently whose content is kept locally
     /// (`DefaultSyncEngine.rejectedChanges`) until dismissed.
     @Default(0) int rejectedChanges,
+
+    /// The server database is older than the app (schema-cache errors such
+    /// as PGRST204/PGRST205: missing column/table/function). Affected
+    /// changes stay queued (never dropped) and affected tables are retried
+    /// on every sync until the migration has been applied. [state] is
+    /// [SyncState.error] and [error] contains [serverOutdatedMessage].
+    @Default(false) bool serverOutdated,
+
+    /// Tables (or Storage buckets / RPCs) the server could not serve in the
+    /// last cycle because its schema is out of date, sorted. Other tables
+    /// still sync normally.
+    @Default(<String>[]) List<String> unavailableTables,
   }) = _SyncStatus;
 }
 

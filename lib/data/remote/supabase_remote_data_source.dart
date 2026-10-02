@@ -450,7 +450,9 @@ RemoteException mapRemoteError(Object error) {
   }
   if (error is sb.PostgrestException) {
     return RemoteException(
-      classifyErrorCode(error.code),
+      isSchemaCacheError(error.message)
+          ? RemoteErrorKind.schemaOutdated
+          : classifyErrorCode(error.code),
       error.message,
       code: error.code,
       cause: error,
@@ -458,7 +460,9 @@ RemoteException mapRemoteError(Object error) {
   }
   if (error is sb.StorageException) {
     return RemoteException(
-      classifyErrorCode(error.statusCode),
+      error.message.toLowerCase().contains('bucket not found')
+          ? RemoteErrorKind.schemaOutdated
+          : classifyErrorCode(error.statusCode),
       error.message,
       code: error.statusCode,
       cause: error,
@@ -483,10 +487,37 @@ RemoteException mapRemoteError(Object error) {
   );
 }
 
+/// PostgREST / Postgres codes meaning "the server schema is older than the
+/// app" (see [RemoteErrorKind.schemaOutdated]).
+const Set<String> schemaOutdatedCodes = {
+  'PGRST200', // relationship not found in the schema cache
+  'PGRST202', // function not found in the schema cache
+  'PGRST204', // column not found in the schema cache
+  'PGRST205', // table not found in the schema cache
+  '42703', // undefined_column
+  '42P01', // undefined_table
+  '42883', // undefined_function
+};
+
+/// Whether a PostgREST error message (or raw body, when it was not parsed)
+/// is a schema-cache miss, e.g. "Could not find the 'x' column of 'y' in
+/// the schema cache".
+bool isSchemaCacheError(String? message) {
+  if (message == null) return false;
+  final text = message.toLowerCase();
+  return text.contains('in the schema cache') ||
+      schemaOutdatedCodes.any(
+        (c) => c.startsWith('PGRST') && message.contains('"$c"'),
+      );
+}
+
 /// Maps a Postgres SQLSTATE, PostgREST `PGRSTxxx` code or HTTP status to a
 /// [RemoteErrorKind].
 RemoteErrorKind classifyErrorCode(String? code) {
   if (code == null || code.isEmpty) return RemoteErrorKind.transient;
+  if (schemaOutdatedCodes.contains(code)) {
+    return RemoteErrorKind.schemaOutdated;
+  }
   if (code == '23503') return RemoteErrorKind.dependency;
   if (code == '23505') return RemoteErrorKind.conflict;
   if (code == '42501') return RemoteErrorKind.permanent; // RLS / privilege
