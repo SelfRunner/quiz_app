@@ -6,14 +6,19 @@ import 'package:go_router/go_router.dart';
 import '../../../ai/llm_provider.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
+import '../../../core/widgets/export_menu.dart';
+import '../../../core/widgets/pin_button.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/question.dart';
 import '../../../data/models/quiz.dart';
 import '../../../data/models/quiz_attempt.dart';
 import '../../../data/models/share.dart';
 import '../../../data/models/syncable.dart';
+import '../../../data/repositories/organization_repository.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../../sharing/widgets/shared_by_chip.dart';
+import '../application/quiz_io_actions.dart';
 import '../domain/exam_session.dart';
 import '../widgets/exam_setup.dart';
 import '../widgets/quiz_format.dart';
@@ -77,6 +82,11 @@ class QuizDetailScreen extends ConsumerWidget {
         ),
         actions: [
           if (quiz != null && owner) ...[
+            PinButton.item(
+              kind: TaggableKind.quiz,
+              id: quiz.id,
+              pinned: quiz.pinned,
+            ),
             IconButton(
               tooltip: 'Share',
               icon: const Icon(Icons.ios_share_outlined),
@@ -92,13 +102,32 @@ class QuizDetailScreen extends ConsumerWidget {
               icon: const Icon(Icons.edit_outlined),
               onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
             ),
+            ExportMenu(items: quizExportItems(quiz)),
             PopupMenuButton<String>(
+              key: const Key('quiz-more'),
               tooltip: 'More',
               icon: const Icon(Icons.more_horiz),
-              onSelected: (v) {
-                if (v == 'delete') _delete(context, ref, quiz);
+              onSelected: (v) => switch (v) {
+                'tags' => editItemTags(
+                  context,
+                  ref,
+                  kind: TaggableKind.quiz,
+                  id: quiz.id,
+                  tags: quiz.tags,
+                ),
+                'delete' => _delete(context, ref, quiz),
+                _ => null,
               },
               itemBuilder: (context) => const [
+                PopupMenuItem(
+                  key: Key('quiz-edit-tags'),
+                  value: 'tags',
+                  child: ListTile(
+                    leading: Icon(Icons.sell_outlined),
+                    title: Text('Edit tags'),
+                  ),
+                ),
+                PopupMenuDivider(),
                 PopupMenuItem(
                   value: 'delete',
                   child: ListTile(
@@ -109,7 +138,8 @@ class QuizDetailScreen extends ConsumerWidget {
               ],
             ),
             Gaps.w8,
-          ] else if (quiz != null)
+          ] else if (quiz != null) ...[
+            ExportMenu(items: quizExportItems(quiz)),
             Padding(
               padding: const EdgeInsets.only(right: Insets.sm),
               child: CopyToAccountButton(
@@ -118,6 +148,7 @@ class QuizDetailScreen extends ConsumerWidget {
                 compact: true,
               ),
             ),
+          ],
         ],
       ),
       body: switch (quizAsync) {
@@ -269,6 +300,40 @@ class _InfoSection extends ConsumerWidget {
         ),
         Gaps.h12,
         Text(quiz.title, style: theme.textTheme.headlineMedium),
+        if (quiz.tags.isNotEmpty || owner) ...[
+          Gaps.h8,
+          Wrap(
+            spacing: Insets.xs,
+            runSpacing: Insets.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TagChips(tags: quiz.tags),
+              if (owner)
+                TextButton.icon(
+                  key: const Key('quiz-tags-button'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: colors.mutedText,
+                  ),
+                  onPressed: () => editItemTags(
+                    context,
+                    ref,
+                    kind: TaggableKind.quiz,
+                    id: quiz.id,
+                    tags: quiz.tags,
+                  ),
+                  icon: Icon(
+                    quiz.tags.isEmpty
+                        ? Icons.sell_outlined
+                        : Icons.edit_outlined,
+                    size: 16,
+                  ),
+                  label: Text(quiz.tags.isEmpty ? 'Add tags' : 'Edit'),
+                ),
+            ],
+          ),
+        ],
         if (description.isNotEmpty) ...[
           Gaps.h8,
           Text(

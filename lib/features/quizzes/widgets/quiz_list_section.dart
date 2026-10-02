@@ -4,14 +4,25 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/quiz.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../application/quiz_io_actions.dart';
 import 'quiz_format.dart';
+
+/// [quizzes] with pinned ones first (each group keeps its order).
+List<Quiz> pinnedQuizzesFirst(List<Quiz> quizzes) => [
+  for (final q in quizzes)
+    if (q.pinned) q,
+  for (final q in quizzes)
+    if (!q.pinned) q,
+];
 
 /// Lists the quizzes of a subject (when [noteId] is null: every quiz of the
 /// subject, subject-level ones first, then note quizzes labeled with their
-/// note) or of a note (only that note's quizzes), with actions to open, create and AI-generate.
+/// note) or of a note (only that note's quizzes), pinned first, with
+/// actions to open, create, import (JSON / CSV) and AI-generate.
 ///
 /// Cross-feature entry point: subject and note screens embed this; the
 /// quizzes feature owns the implementation. Renders as a non-scrolling
@@ -67,18 +78,20 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
   @override
   Widget build(BuildContext context) {
     final noteId = widget.noteId;
-    final quizzes = noteId == null
-        ? ref
-              .watch(quizzesBySubjectProvider(widget.subjectId))
-              .whenData(
-                (l) => [
-                  for (final q in l)
-                    if (q.noteId == null) q,
-                  for (final q in l)
-                    if (q.noteId != null) q,
-                ],
-              )
-        : ref.watch(quizzesByNoteProvider(noteId));
+    final quizzes =
+        (noteId == null
+                ? ref
+                      .watch(quizzesBySubjectProvider(widget.subjectId))
+                      .whenData(
+                        (l) => [
+                          for (final q in l)
+                            if (q.noteId == null) q,
+                          for (final q in l)
+                            if (q.noteId != null) q,
+                        ],
+                      )
+                : ref.watch(quizzesByNoteProvider(noteId)))
+            .whenData(pinnedQuizzesFirst);
 
     final actions = widget.readOnly
         ? null
@@ -91,6 +104,17 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
                 icon: const Icon(Icons.auto_awesome_outlined, size: 18),
                 label: const Text('Generate with AI'),
               ),
+            ),
+            TextButton.icon(
+              key: const Key('quiz-import'),
+              onPressed: () => importNewQuiz(
+                context,
+                ref,
+                subjectId: widget.subjectId,
+                noteId: widget.noteId,
+              ),
+              icon: const Icon(Icons.upload_file_outlined, size: 18),
+              label: const Text('Import quiz'),
             ),
             TextButton.icon(
               key: const Key('quiz-new'),
@@ -195,39 +219,75 @@ class _QuizTile extends ConsumerWidget {
         ? ref.watch(noteProvider(noteId)).value?.title
         : null;
     final colors = AppColors.of(context);
+    final Widget info = showNote
+        ? Text.rich(
+            TextSpan(
+              children: [
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: Insets.xs),
+                    child: Icon(
+                      Icons.description_outlined,
+                      size: 14,
+                      color: colors.faintText,
+                    ),
+                  ),
+                ),
+                TextSpan(
+                  text:
+                      'From note: '
+                      '${noteTitle == null || noteTitle.trim().isEmpty ? 'Untitled note' : noteTitle}',
+                ),
+                TextSpan(text: ' · ${parts.join(' · ')}'),
+              ],
+            ),
+            key: ValueKey('quiz-note-label-${quiz.id}'),
+          )
+        : Text(parts.join(' · '));
     return ListRowTile(
       key: ValueKey('quiz-row-${quiz.id}'),
       leading: Tooltip(
         message: aiMade ? 'Generated with AI' : 'Quiz',
         child: Icon(aiMade ? Icons.auto_awesome_outlined : Icons.quiz_outlined),
       ),
-      title: Text(quiz.title),
-      subtitle: showNote
-          ? Text.rich(
-              TextSpan(
-                children: [
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: Insets.xs),
-                      child: Icon(
-                        Icons.description_outlined,
-                        size: 14,
-                        color: colors.faintText,
-                      ),
-                    ),
-                  ),
-                  TextSpan(
-                    text:
-                        'From note: '
-                        '${noteTitle == null || noteTitle.trim().isEmpty ? 'Untitled note' : noteTitle}',
-                  ),
-                  TextSpan(text: ' · ${parts.join(' · ')}'),
-                ],
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              quiz.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (quiz.pinned)
+            Padding(
+              padding: const EdgeInsets.only(left: Insets.xs),
+              child: Icon(
+                Icons.push_pin,
+                key: ValueKey('quiz-pinned-${quiz.id}'),
+                size: 14,
+                color: colors.faintText,
+                semanticLabel: 'Pinned',
               ),
-              key: ValueKey('quiz-note-label-${quiz.id}'),
-            )
-          : Text(parts.join(' · ')),
+            ),
+        ],
+      ),
+      subtitle: quiz.tags.isEmpty
+          ? info
+          : Wrap(
+              spacing: Insets.sm,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                info,
+                TagChips(
+                  key: ValueKey('quiz-tags-${quiz.id}'),
+                  tags: quiz.tags,
+                  dense: true,
+                  maxVisible: 3,
+                ),
+              ],
+            ),
       onTap: () => context.push(AppRoutes.quiz(quiz.id)),
       actions: [
         if (count > 0)
