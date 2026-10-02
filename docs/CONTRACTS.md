@@ -57,9 +57,9 @@ JSON keys are snake_case versions of the field names. `?` = nullable.
 | `Syncable` (interface) | `id, ownerId, createdAt, updatedAt, deletedAt?, toJson()`; ext `isDeleted`, `isOwnedBy(userId)` |
 | `Profile` | `id, email?, displayName?` |
 | `AppUser` (no JSON) | `id, email?, displayName?` |
-| `Subject` : Syncable | `id, ownerId, title, description?, color? (int ARGB32), createdAt, updatedAt, deletedAt?` |
-| `Note` : Syncable | `id, subjectId, ownerId, title, contentMd (default ''), createdAt, updatedAt, deletedAt?` |
-| `Quiz` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), questions (List<Question>, default []), createdAt, updatedAt, deletedAt?` |
+| `Subject` : Syncable | `id, ownerId, title, description?, color? (int ARGB32), pinned (default false), archivedAt?, createdAt, updatedAt, deletedAt?`; ext `isArchived` (pin/archive: Wave 3) |
+| `Note` : Syncable | `id, subjectId, ownerId, title, contentMd (default ''), tags (List<String>, default []), pinned (default false), createdAt, updatedAt, deletedAt?` (tags/pinned: Wave 3) |
+| `Quiz` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), questions (List<Question>, default []), tags (default []), pinned (default false), createdAt, updatedAt, deletedAt?` |
 | `Question` | `id, type (QuestionType), prompt, options (List<String>), correctIndices (List<int>), answerText?, explanation?` |
 | `QuestionType` | `mcqSingle 'mcq_single'`, `mcqMulti 'mcq_multi'`, `trueFalse 'true_false'`, `shortAnswer 'short_answer'`; `wireName`, `hasOptions` |
 | `QuizSource` | `contextText?, youtubeUrl?, provider? (LlmProviderId.wireName), model?, notes (List<QuizSourceRef{id, name}>, default []), attachments (List<QuizSourceRef>, default [])` (Wave 1: notes/attachments used as AI sources) |
@@ -68,14 +68,17 @@ JSON keys are snake_case versions of the field names. `?` = nullable.
 | `QuestionAnswer` | `questionId, selectedIndices (List<int>), textAnswer?, isCorrect? (null = ungraded)` |
 | `Share` | `id, ownerId, recipientId, resourceType (ShareResourceType), resourceId, createdAt`; read-only joins (not in `toJson`): `recipient? (Profile), owner? (Profile), resourceTitle?` |
 | `ShareResourceType` | `subject`, `note`, `quiz`, `deck` (JSON = name; `deck` since Wave 2) |
-| `Deck` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), cards (List<Flashcard>), createdAt, updatedAt, deletedAt?` |
+| `Deck` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), cards (List<Flashcard>), tags (default []), pinned (default false), createdAt, updatedAt, deletedAt?` |
+| `Chat` : Syncable | `id, ownerId, scopeType (ChatScopeType: subject, note, attachment, general; JSON = name, unknown -> general), scopeId? (null iff general), title (default ''), provider?, model?, createdAt, updatedAt, deletedAt?` (Wave 3, private) |
+| `ChatMessage` : Syncable | `id, chatId, ownerId, role (ChatRole: user, assistant, system; unknown -> system), content (default ''), citations (List<ChatCitation{type, id, title (default ''), snippet?}>, default []), createdAt, updatedAt, deletedAt?` |
+| Tags (`tags.dart`) | `normalizeTag(s)` / `normalizeTags(list)` (trim, collapse spaces, lowercase, strip `#`, cut to 64, dedupe); `TagRules.maxTags` 50, `maxTagLength` 64 |
 | `Flashcard` | `id, front, back, hint?` (`id` stable, unique in the deck, <= 255 chars) |
 | `CardReview` : Syncable | `id (uuid v5, CardReview.idFor), ownerId, deckId, cardId, state (CardState), dueAt, stability, difficulty, elapsedDays, scheduledDays, reps, lapses, lastReviewAt?, createdAt, updatedAt, deletedAt?`; `toFsrs()`, `withFsrs(card)` |
 | `CardState` / `Rating` | `lib/study/fsrs.dart` (re-exported by `card_review.dart`): `newCard 0, learning 1, review 2, relearning 3` (JSON = int); `again 1, hard 2, good 3, easy 4` |
 | `Mistake` : Syncable | `id (uuid v5, Mistake.idFor), ownerId, quizId, questionId, wrongCount, correctStreak, lastWrongAt?, resolvedAt?, createdAt, updatedAt, deletedAt?`; `isOpen`, `resolveAfterCorrect = 2` |
 | `OutboxOp` | `id, table (String), op (OutboxOpType), rowId, payload? (Map), createdAt, attempts (default 0), lastError?` |
 | `OutboxOpType` | `upsert`, `delete` (hard delete, reserved), `uploadImage 'upload_image'`, `deleteImage 'delete_image'`, `uploadAttachment 'upload_attachment'`, `deleteAttachment 'delete_attachment'` |
-| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, attachments, decks, cardReviews='card_reviews', mistakes, noteImagesBucket='note-images', attachmentsBucket='attachments'`; `synced` = [subjects, notes, quizzes, quiz_attempts, attachments, decks, card_reviews, mistakes]; `privateStudy` = {card_reviews, mistakes} |
+| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, attachments, decks, cardReviews='card_reviews', mistakes, noteImagesBucket='note-images', attachmentsBucket='attachments'`; `chats`, `chatMessages='chat_messages'` (Wave 3); `synced` = [subjects, notes, quizzes, quiz_attempts, attachments, decks, card_reviews, mistakes, chats, chat_messages]; `privateStudy` = {card_reviews, mistakes}; `privateChats` = {chats, chat_messages} |
 | `Attachment` : Syncable | `id, subjectId, ownerId, name, mimeType?, sizeBytes (default 0), kind (AttachmentKind, default other), storagePath, extractedText?, createdAt, updatedAt, deletedAt?`; `fileName` (last path segment); statics `maxSizeBytes` (50 MiB), `maxExtractedTextLength` (200 000), `maxNameLength` (512), `buildStoragePath(...)`, `sanitizeFileName(name)` |
 | `AttachmentKind` | `pdf, image, text, docx, audio, video, other` (JSON = name, unknown -> other); `AttachmentKind.detect(fileName:, mimeType?)` (extension first, then MIME). Top-level helpers `fileExtension(name)`, `mimeTypeForFileName(name)` |
 | `NoteImageRef` (plain) | `ownerId, noteId, fileName`; `storagePath = '{owner}/{note}/{file}'`, `markdownUrl = 'note-image://{storagePath}'`, `tryParse(String)` |
@@ -551,6 +554,201 @@ access or copying; `deleted_at` stays the only "trash".
 `tags` of every copied note/quiz/deck. `pinned` and `archived_at` are not
 copied (copies start unpinned and unarchived). Chats are never copied.
 
+### Wave 3 client API (data layer, search, import/export — implemented)
+
+Code: models `lib/data/models/{chat,tags}.dart` (+ `tags`/`pinned` on
+`Note`/`Quiz`/`Deck`, `pinned`/`archivedAt` on `Subject`); repositories
+`lib/data/repositories/{chat_repository,local_chat_repository,organization_repository,local_organization_repository}.dart`;
+search `lib/search/` (pure Dart except `search_providers.dart`); import /
+export `lib/io/` (pure Dart: strings / bytes in and out; saving or picking
+files is the UI's job). New model fields are defaulted, so old Hive rows
+and server rows without them decode (`tags: []`, `pinned: false`,
+`archivedAt: null`) and every upsert now sends them (a server without the
+Wave 3 migration keeps those ops queued: see *Server schema out of date*
+in *Data layer notes*).
+
+**Chats** (private, never shared):
+
+```dart
+abstract interface class ChatRepository {
+  Stream<List<Chat>> watchAll();                                   // mine, updatedAt desc (touched on every saved message)
+  Stream<List<Chat>> watchByScope(ChatScopeType type, String? scopeId);
+  Stream<Chat?> watchById(String id);  Future<Chat?> getById(String id);
+  Stream<List<ChatMessage>> watchMessages(String chatId);          // createdAt asc, then id; drafts included
+  Future<List<ChatMessage>> getMessages(String chatId);
+  Future<Chat> create({required ChatScopeType scopeType, String? scopeId, String title = '',
+      String? provider, String? model});
+  Future<Chat> rename(String chatId, String title);
+  Future<Chat> setModel(String chatId, {String? provider, String? model});
+  Future<void> delete(String chatId);                              // tombstones the chat AND every message
+  Future<ChatMessage> addMessage({required String chatId, required ChatRole role,
+      String content = '', List<ChatCitation> citations = const [], bool draft = false});
+  Future<ChatMessage> updateMessage(ChatMessage m, {bool finalize = true}); // content + citations
+  Future<void> deleteMessage(String messageId);
+  Future<int> finalizeDrafts();                                    // push leftover drafts (app start)
+}
+```
+
+- `create`: `scopeId` null iff `general` (`ValidationException`); the scope
+  must be cached and live (own or shared subject / note / attachment, else
+  `NotFoundException`). Title trimmed and cut to 500 chars, provider / model
+  to 255; content cut to 200 000; citations with an empty or too long
+  `type` (> 64) / `id` (> 255) are dropped. Other users' chats are
+  invisible (`getById` null) and read-only (`PermissionDeniedException`).
+- **Streaming**: `var m = await repo.addMessage(chatId: id, role:
+  ChatRole.assistant, draft: true);` then per chunk `m = await
+  repo.updateMessage(m.copyWith(content: m.content + chunk), finalize:
+  false)` (Hive write only, **no outbox op**), finally `await
+  repo.updateMessage(m.copyWith(citations: ...))` (one upsert + chat touch).
+  Draft ids are kept in `sync_meta` (`chat_drafts`) so `finalizeDrafts()`
+  can push a draft left behind by a killed app; `deleteMessage` / `delete`
+  forget drafts.
+- Sync: both tables are pulled / pushed like the others (own cursors, FIFO
+  push: chat before its messages; a message whose chat isn't on the server
+  yet waits on `23503`). Not reconciled (the server only returns own rows).
+  `42501` on a chat insert (scope no longer readable) drops the op
+  (recorded in `rejectedChanges`); the chat stays usable locally. Missing
+  tables (`PGRST205`) -> ops kept, `serverOutdated` with
+  `unavailableTables` `['chat_messages', 'chats']`.
+- Providers: `chatRepositoryProvider`, `chatsProvider`,
+  `chatsByScopeProvider((type: ChatScopeType.note, id: noteId))`,
+  `chatProvider(id)`, `chatMessagesProvider(chatId)`.
+- "Source unavailable": check the scope with `subjectProvider` /
+  `noteProvider` / `attachmentProvider(chat.scopeId!)` (null = gone).
+
+**Organization** (tags, pin, archive, filtered / sorted lists):
+
+```dart
+enum TaggableKind { note, quiz, deck }
+enum ItemSort { recent /* updatedAt desc */, name /* title A-Z */, created /* createdAt desc */ }
+enum ArchiveFilter { active, archived, all }
+class ItemListQuery { String? subjectId; String? noteId; Set<String> tags /* all required */;
+  bool pinnedOnly = false; bool includeArchived = false; bool ownedOnly = false;
+  ItemSort sort = recent; bool pinnedFirst = true; copyWith(...); }        // value equality
+class SubjectListQuery { ArchiveFilter archive = active; bool pinnedOnly = false;
+  bool includeShared = false; ItemSort sort = name; bool pinnedFirst = true; }
+class TagCount { String tag; int count; }
+
+abstract interface class OrganizationRepository {
+  Future<void> setTags(TaggableKind kind, String id, Iterable<String> tags);
+  Future<void> addTag(TaggableKind kind, String id, String tag);
+  Future<void> removeTag(TaggableKind kind, String id, String tag);
+  Future<void> setPinned(TaggableKind kind, String id, bool pinned);
+  Future<int> renameTag(String from, String to);   // own items; merges; returns #changed
+  Future<int> deleteTag(String tag);
+  Future<Subject> setSubjectPinned(String subjectId, bool pinned);
+  Future<Subject> archiveSubject(String subjectId);    // archivedAt = now
+  Future<Subject> unarchiveSubject(String subjectId);  // archivedAt = null
+  Stream<List<Subject>> watchSubjects([SubjectListQuery q]);
+  Stream<List<Note>> watchNotes([ItemListQuery q]);
+  Stream<List<Quiz>> watchQuizzes([ItemListQuery q]);  // also: every readable quiz
+  Stream<List<Deck>> watchDecks([ItemListQuery q]);
+  Stream<List<TagCount>> watchTags({TaggableKind? kind, String? subjectId, bool includeArchived = false});
+}
+```
+
+- Writes are owner-only (`PermissionDeniedException` on shared items),
+  `NotFoundException` for missing ones, and **no-ops when nothing changes**
+  (no outbox op). Tags are normalized (`normalizeTags`); > 50 ->
+  `ValidationException`. `NoteRepository.update` etc. save whatever `tags`
+  / `pinned` the passed model carries (edit with `copyWith`, they are kept).
+- Lists: `pinnedFirst` puts pinned items first, each group in `sort` order
+  (ties by id). Tag filter = item has **every** tag. With `subjectId` set,
+  items of an archived subject are listed (the user opened it); without it
+  they are hidden unless `includeArchived`. Shared items are included unless
+  `ownedOnly`. Tag counts cover live readable items (own + shared),
+  most-used first, then by name.
+- **Archived subjects**: hidden from `SubjectRepository.watchAll` /
+  `subjectsProvider` (now: active only, pinned first, then title), from the
+  global study queue (`watchDue()` / `dueQueueProvider` /
+  `dueCountProvider`; `watchDue(deckId:)` still works for a deck of an
+  archived subject) and from the dashboard snapshot (their subjects /
+  quizzes / decks are left out of per-subject accuracy, weakest lists, due
+  cards and recent activity; the user's attempts and reviews still count for
+  streak and totals). Still reachable by id (`subjectProvider(id)` etc.), in
+  search, and via `archivedSubjectsProvider` /
+  `SubjectListQuery(archive: ArchiveFilter.archived)`.
+- Providers: `organizationRepositoryProvider`,
+  `subjectListProvider(SubjectListQuery(...))`, `archivedSubjectsProvider`,
+  `noteListProvider(ItemListQuery(...))`, `quizListProvider(...)`,
+  `deckListProvider(...)`, `allTagsProvider` (all kinds, outside archived
+  subjects), `tagCountsProvider((kind: TaggableKind.note, subjectId: id))`.
+
+**Search** (`lib/search/`):
+
+- `SearchIndex` (pure Dart, in memory): `upsert(SearchDocument)`,
+  `remove(type, id)`, `search(query, {filters, limit = 50, now})`.
+  Documents: `SearchDocument{type (SearchItemType: subject, note, quiz,
+  deck, attachment, chat), id, title, body, tags, subjectId?, noteId?,
+  ownerId?, updatedAt, pinned}`, built by `search_documents.dart`:
+  subjects (title + description), notes (title + content without Markdown
+  syntax, `plainTextFromMarkdown`), quizzes (title + description + prompts
+  + options + expected answers), decks (title + description + fronts /
+  backs / hints), attachments (name + `extractedText`), chats (title;
+  `subjectId` = the scope's subject when known).
+- Matching: tokens = Unicode letter / digit runs, lowercased, Latin
+  diacritics folded (`é` -> `e`, `ß` -> `ss`), light plural stemming
+  (`notes` -> `note`, `studies` -> `study`). **Every** query word must
+  match (exact stem, or as a prefix of an indexed word when >= 2 chars:
+  results while typing). `"quoted phrase"` = must occur in that order.
+- Ranking: field weights (title 4, tag 3, body BM25-like) x smoothed idf;
+  exact words beat prefix expansions; bonuses for an exact / leading title
+  match, the query as a phrase (title > body), recency (half-life ~6 weeks)
+  and pinned; archived items rank lower.
+- `SearchFilters{types (empty = all), subjectId, tags (all required),
+  includeArchived = true, pinnedOnly = false}`. Empty query + no filters
+  -> `[]`; empty query + filters -> matching items, newest first (browse by
+  tag / type).
+- `SearchResult{document, score, titleHighlights, snippet,
+  snippetHighlights (List<HighlightRange{start, end}>, offsets into
+  `title` / `snippet`), matchedFields (title / tags / body), subjectTitle?,
+  archived}` with `type`, `id`, `title` getters. Snippet: ~180 chars of the
+  body around the first match (`…` marks cuts, newlines as spaces), or the
+  body's beginning for title / tag-only hits.
+- Live index: `LiveSearchIndex.attach(type:, source: stream, id:,
+  toDocument:)` diffs each emitted list (by id, `identical` / `==`) and
+  re-indexes only changed items. `searchIndexProvider` attaches subjects
+  (all, incl. archived and shared), accessible notes, every quiz, every
+  deck, every attachment and chats; kept alive 5 min after the last
+  listener; rebuilt on account switch. `searchRevisionProvider` is loading
+  until every source delivered once.
+- UI: `ref.watch(searchProvider((query: text, filters: const
+  SearchFilters(types: {SearchItemType.note}))))` ->
+  `AsyncValue<List<SearchResult>>` (max 50). Widget tests override the
+  repository providers it reads (subject / note / deck / attachment / chat /
+  organization) or `searchProvider` itself.
+- Performance (debug VM, `test/search/search_index_test.dart`): 10 000
+  items index in ~1.5 s, ~20-35 ms per query, ~1 ms per incremental update.
+
+**Import / export** (`lib/io/`, pure Dart):
+
+| Function | Result |
+|---|---|
+| `noteToMarkdown(note, {subjectTitle, imageUrl})` | Markdown with YAML front matter (`title`, `subject`, `tags` as `["a", "b"]`, `created`, `updated`; strings double-quoted and escaped); `imageUrl(NoteImageRef)` rewrites `note-image://` links |
+| `parseMarkdownNote(text, {fileName})` -> `MarkdownNote{title, body, tags, subject?}` | front matter subset (scalars, flow or block tag lists, `tags: a, b`); title fallback: `# heading`, file name, `Untitled` |
+| `subjectToZip(subject, notes:, quizzes:, decks:, images:)` -> `Uint8List` | `<subject>/<note>.md`, `<subject>/quizzes/<title>.json`, `<subject>/decks/<title>.csv`, `<subject>/images/<noteId>-<file>` for `images` (keyed by `NoteImageRef.storagePath`; their links become relative); names via `safeFileName`, de-duplicated with ` (2)` |
+| `quizToJson(quiz)` | lossless `{"format": "quiz_app.quiz", "version": 1, "quiz": Quiz.toJson() minus owner_id / subject_id / note_id / deleted_at}` |
+| `quizToCsv(quiz)` | `type,prompt,options,correct,answer,explanation`; options `\|`-separated (escapes `\\|`, `\\\\`); `correct` = **1-based** option numbers, `\|`-separated |
+| `importQuizJson(text, {newId, newIds = false})` | envelope, bare quiz object or bare question list (snake_case or camelCase); keeps unique question ids unless `newIds` |
+| `importQuizCsv(text, {newId})` | header optional / any order (aliases `question`, `choices`, `correct_answer`, `answer_text`, ...); `,` `;` or tab detected; `correct` as 1-based numbers, letters (`A\|C`), option text or `true` / `false`; a `0` means 0-based (warning); type aliases (`single`, `multi`, `tf`, `short`, ...) or inferred |
+| `deckToCsv(deck)` / `deckToAnkiTsv(deck)` | `front,back,hint` CSV / Anki "Notes in Plain Text" (`#separator:tab`, `#html:true`, `#columns:Front Back Hint`, `#tags:` from the deck's tags; HTML-escaped, newline -> `<br>`) |
+| `importDeckText(text)` / `importDeckCsv` / `importDeckTsv` | auto-detects TSV (`#separator:` / `#html:` headers or tabs); optional `front,back[,hint]` header; Anki HTML -> text |
+| `markdownToBlocks(md)` -> `List<MdBlock>` | for a UI-level PDF export: `MdHeading{level, spans}`, `MdParagraph`, `MdListItem{spans, depth, ordered, number?, checked?}`, `MdCode{text, language?}`, `MdQuote{children}`, `MdTable{header, rows}`, `MdRule`, `MdImage{url, alt}`, `MdMath{tex}`; `MdSpan{text, bold, italic, code, strike, link?, imageUrl?}` |
+
+Imports return `ImportResult<T>{items, errors, warnings, title?,
+description?, tags}` (`hasErrors`, `isEmpty`, `report` = one line per
+issue). `ImportIssue{message, line? (1-based physical line where the row
+starts; also for JSON syntax errors), field? (column or JSON path such as
+`questions[2]`)}`. Invalid rows are skipped and reported; valid ones come
+back with fresh ids (`newId`, default uuid v4). Validation follows the
+question rules (prompt required; single / multi choice: 2..8 distinct,
+non-empty options, exactly one / at least one correct index in range;
+true/false options `True|False`; short answer needs an answer). Then create
+the quiz / deck with the repositories (`create(..., questions:
+result.items)`, `organization.setTags(...)` for `result.tags`).
+Lower level: `encodeCsv` / `decodeCsv` (`CsvRow{line, fields}`,
+`CsvFormatException{line}`) in `csv.dart`.
+
 ## Local storage (`lib/data/local/hive_boxes.dart`)
 
 `HiveBoxes.init()` (called from bootstrap) runs `Hive.initFlutter('quiz_app')`,
@@ -565,7 +763,8 @@ boxes (e.g. image bytes cache) in `init()`. Added: `note_image_bytes`
 scoped) and `attachment_bytes` (`LazyBox<Uint8List>`, web attachment cache;
 native uses files under `{app support}/attachments`); Wave 2: `decks`,
 `card_reviews`, `mistakes` (`Box<String>`, user scoped); `prefs` key
-`study_settings`. Sign-out clearing is done by the sync engine (see Data
+`study_settings`; Wave 3: `chats`, `chat_messages` (`Box<String>`, user
+scoped), `sync_meta` key `chat_drafts` (local-only streaming drafts). Sign-out clearing is done by the sync engine (see Data
 layer notes).
 
 ## Interfaces
@@ -588,7 +787,7 @@ abstract interface class AuthRepository {
 }                                               // impl: SupabaseAuthRepository (done)
 
 abstract interface class SubjectRepository {
-  Stream<List<Subject>> watchAll();             // own, sorted by title
+  Stream<List<Subject>> watchAll();             // own, active (not archived), pinned first, then title
   Stream<Subject?> watchById(String id);        // own or shared
   Future<Subject?> getById(String id);
   Future<Subject> create({required String title, String? description, int? color});
@@ -774,6 +973,11 @@ should resolve the provider/model before calling so it knows what was used.
 | `openMistakesProvider` | same | `StreamProvider.autoDispose<List<MistakeGroup>>` |
 | `dashboardStatsProvider` | `lib/study/study_providers.dart` | `StreamProvider.autoDispose<DashboardStats>` |
 | `noteSearchProvider(query)` | same | `Provider.autoDispose.family<AsyncValue<List<Note>>, String>` (filtered `accessibleNotesProvider`) |
+| `chatRepositoryProvider`, `organizationRepositoryProvider` | `lib/data/data_providers.dart` | `Provider<...>` (Wave 3, see *Wave 3 client API*) |
+| `chatsProvider` / `chatsByScopeProvider((type:, id:))` / `chatProvider(id)` / `chatMessagesProvider(chatId)` | same | `StreamProvider.autoDispose(.family)` |
+| `subjectListProvider(SubjectListQuery)`, `archivedSubjectsProvider`, `noteListProvider` / `quizListProvider` / `deckListProvider(ItemListQuery)` | same | `StreamProvider.autoDispose(.family)` |
+| `allTagsProvider` / `tagCountsProvider((kind:, subjectId:))` | same | `StreamProvider.autoDispose<List<TagCount>>` (`.family`) |
+| `searchIndexProvider`, `searchRevisionProvider`, `searchProvider((query:, filters:))` | `lib/search/search_providers.dart` | `Provider<LiveSearchIndex>`, `StreamProvider<int>`, `Provider.family<AsyncValue<List<SearchResult>>, SearchRequest>` |
 | `apiKeyStoreProvider`, `llmProviderFactoryProvider`, `transcriptServiceProvider`, `aiServiceProvider` | `lib/ai/ai_providers.dart` | `Provider<...>` (implemented) |
 | `aiHttpClientProvider` | `lib/ai/ai_providers.dart` | `Provider<http.Client>` (override with `MockClient` in tests) |
 

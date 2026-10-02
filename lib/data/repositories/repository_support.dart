@@ -127,6 +127,12 @@ extension AttachmentDeletion on DataContext {
   }
 }
 
+/// Ids of live archived subjects (hidden from default lists, the dashboard
+/// and the study queue).
+Set<String> archivedSubjectIds(LocalDatabase db) => {
+  for (final s in db.subjects.where((s) => s.archivedAt != null)) s.id,
+};
+
 /// `note-image://` references in a Markdown body (deduplicated, in order).
 List<NoteImageRef> noteImageRefsIn(String markdown) {
   final seen = <NoteImageRef>{};

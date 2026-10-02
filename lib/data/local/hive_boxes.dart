@@ -20,6 +20,8 @@ abstract final class HiveBoxes {
   static const String decks = 'decks';
   static const String cardReviews = 'card_reviews';
   static const String mistakes = 'mistakes';
+  static const String chats = 'chats';
+  static const String chatMessages = 'chat_messages';
 
   /// `OutboxOp` JSON keyed by op id; process in `createdAt` order.
   static const String outbox = 'outbox';
@@ -53,6 +55,8 @@ abstract final class HiveBoxes {
     decks,
     cardReviews,
     mistakes,
+    chats,
+    chatMessages,
     outbox,
     syncMeta,
   ];
@@ -66,6 +70,8 @@ abstract final class HiveBoxes {
     decks,
     cardReviews,
     mistakes,
+    chats,
+    chatMessages,
     outbox,
     syncMeta,
     prefs,

@@ -26,6 +26,8 @@ class LocalDatabase {
     required Box<String> decksBox,
     required Box<String> cardReviewsBox,
     required Box<String> mistakesBox,
+    required Box<String> chatsBox,
+    required Box<String> chatMessagesBox,
     required Box<String> outboxBox,
     required Box<String> syncMetaBox,
     required this.images,
@@ -72,6 +74,16 @@ class LocalDatabase {
          box: mistakesBox,
          fromJson: Mistake.fromJson,
        ),
+       chats = LocalTable<Chat>(
+         name: SyncTables.chats,
+         box: chatsBox,
+         fromJson: Chat.fromJson,
+       ),
+       chatMessages = LocalTable<ChatMessage>(
+         name: SyncTables.chatMessages,
+         box: chatMessagesBox,
+         fromJson: ChatMessage.fromJson,
+       ),
        outbox = Outbox(outboxBox, clock: clock, newId: newId),
        meta = SyncMetaStore(syncMetaBox);
 
@@ -90,6 +102,8 @@ class LocalDatabase {
     decksBox: HiveBoxes.box(HiveBoxes.decks),
     cardReviewsBox: HiveBoxes.box(HiveBoxes.cardReviews),
     mistakesBox: HiveBoxes.box(HiveBoxes.mistakes),
+    chatsBox: HiveBoxes.box(HiveBoxes.chats),
+    chatMessagesBox: HiveBoxes.box(HiveBoxes.chatMessages),
     outboxBox: HiveBoxes.box(HiveBoxes.outbox),
     syncMetaBox: HiveBoxes.box(HiveBoxes.syncMeta),
     images:
@@ -118,6 +132,10 @@ class LocalDatabase {
 
   /// The user's own wrong-answer tracking per question (private).
   final LocalTable<Mistake> mistakes;
+
+  /// The user's own AI chats and their messages (private, Wave 3).
+  final LocalTable<Chat> chats;
+  final LocalTable<ChatMessage> chatMessages;
   final Outbox outbox;
   final SyncMetaStore meta;
 
@@ -140,6 +158,8 @@ class LocalDatabase {
     decks,
     reviews,
     mistakes,
+    chats,
+    chatMessages,
   ];
 
   /// Local blob cache for a Storage bucket (null for unknown buckets).
@@ -158,6 +178,8 @@ class LocalDatabase {
     SyncTables.decks => decks,
     SyncTables.cardReviews => reviews,
     SyncTables.mistakes => mistakes,
+    SyncTables.chats => chats,
+    SyncTables.chatMessages => chatMessages,
     _ => throw ArgumentError.value(name, 'name', 'Not a synced table'),
   };
 

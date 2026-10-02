@@ -208,7 +208,11 @@ class FakeRemote
     } else if (table == SyncTables.cardReviews) {
       parentTable = SyncTables.decks;
       parentId = row['deck_id'] as String?;
+    } else if (table == SyncTables.chatMessages) {
+      parentTable = SyncTables.chats;
+      parentId = row['chat_id'] as String?;
     }
+    if (table == SyncTables.chats && existing == null) _checkChatScope(row);
     if (parentTable != null && !tables[parentTable]!.containsKey(parentId)) {
       throw const RemoteException(
         RemoteErrorKind.dependency,
@@ -217,8 +221,40 @@ class FakeRemote
       );
     }
     if (SyncTables.privateStudy.contains(table)) _checkStudyRow(table, row);
+    if (table == SyncTables.chatMessages &&
+        tables[SyncTables.chats]![parentId]!['owner_id'] != row['owner_id']) {
+      throw const RemoteException(
+        RemoteErrorKind.permanent,
+        'chat is not owned by the message owner',
+        code: '42501',
+      );
+    }
     log.add('upsert:$table:$id');
     return _copy(serverWrite(table, row));
+  }
+
+  /// `chats` INSERT: the scope must be readable (`can_read_chat_scope`).
+  void _checkChatScope(Map<String, dynamic> row) {
+    final scopeId = row['scope_id'] as String?;
+    final readable = switch (row['scope_type']) {
+      'general' => scopeId == null,
+      'subject' => _readableRow(SyncTables.subjects, scopeId),
+      'note' => _readableRow(SyncTables.notes, scopeId),
+      'attachment' => _readableRow(SyncTables.attachments, scopeId),
+      _ => false,
+    };
+    if (!readable) {
+      throw const RemoteException(
+        RemoteErrorKind.permanent,
+        'new row violates row-level security policy',
+        code: '42501',
+      );
+    }
+  }
+
+  bool _readableRow(String table, String? id) {
+    final row = id == null ? null : tables[table]![id];
+    return row != null && visible(table, row);
   }
 
   /// `card_reviews` / `mistakes`: INSERT needs read access to the parent

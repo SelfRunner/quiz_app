@@ -71,6 +71,8 @@ abstract final class SyncTables {
   static const String decks = 'decks';
   static const String cardReviews = 'card_reviews';
   static const String mistakes = 'mistakes';
+  static const String chats = 'chats';
+  static const String chatMessages = 'chat_messages';
 
   /// Storage bucket for note images.
   static const String noteImagesBucket = 'note-images';
@@ -88,8 +90,13 @@ abstract final class SyncTables {
     decks,
     cardReviews,
     mistakes,
+    chats,
+    chatMessages,
   ];
 
   /// Private per-user tables (never shared; ids derived with uuid v5).
   static const Set<String> privateStudy = {cardReviews, mistakes};
+
+  /// Private AI chat tables (owner-only, never shared; Wave 3).
+  static const Set<String> privateChats = {chats, chatMessages};
 }
