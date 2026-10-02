@@ -17,7 +17,8 @@ mixin _$QuizGenerationRequest {
 
 /// Pasted source material. At least one of [contextText]/[youtubeUrl].
  String? get contextText; String? get youtubeUrl; int get questionCount; Set<QuestionType> get questionTypes; Difficulty get difficulty;/// Output language (e.g. `en`); null = same as the source.
- String? get language; String? get extraInstructions;/// Overrides; null = selection from `ApiKeyStore`.
+ String? get language; String? get extraInstructions;/// Subject or note title, gives the model context (optional).
+ String? get topic;/// Overrides; null = selection from `ApiKeyStore`.
  LlmProviderId? get providerId; String? get model;
 /// Create a copy of QuizGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
@@ -30,20 +31,20 @@ $QuizGenerationRequestCopyWith<QuizGenerationRequest> get copyWith => _$QuizGene
 @override
 bool operator ==(Object other) {
   final _this = this as QuizGenerationRequest;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is QuizGenerationRequest&&(identical(other.contextText, _this.contextText) || other.contextText == _this.contextText)&&(identical(other.youtubeUrl, _this.youtubeUrl) || other.youtubeUrl == _this.youtubeUrl)&&(identical(other.questionCount, _this.questionCount) || other.questionCount == _this.questionCount)&&const DeepCollectionEquality().equals(other.questionTypes, _this.questionTypes)&&(identical(other.difficulty, _this.difficulty) || other.difficulty == _this.difficulty)&&(identical(other.language, _this.language) || other.language == _this.language)&&(identical(other.extraInstructions, _this.extraInstructions) || other.extraInstructions == _this.extraInstructions)&&(identical(other.providerId, _this.providerId) || other.providerId == _this.providerId)&&(identical(other.model, _this.model) || other.model == _this.model));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is QuizGenerationRequest&&(identical(other.contextText, _this.contextText) || other.contextText == _this.contextText)&&(identical(other.youtubeUrl, _this.youtubeUrl) || other.youtubeUrl == _this.youtubeUrl)&&(identical(other.questionCount, _this.questionCount) || other.questionCount == _this.questionCount)&&const DeepCollectionEquality().equals(other.questionTypes, _this.questionTypes)&&(identical(other.difficulty, _this.difficulty) || other.difficulty == _this.difficulty)&&(identical(other.language, _this.language) || other.language == _this.language)&&(identical(other.extraInstructions, _this.extraInstructions) || other.extraInstructions == _this.extraInstructions)&&(identical(other.topic, _this.topic) || other.topic == _this.topic)&&(identical(other.providerId, _this.providerId) || other.providerId == _this.providerId)&&(identical(other.model, _this.model) || other.model == _this.model));
 }
 
 
 @override
 int get hashCode {
   final _this = this as QuizGenerationRequest;
-  return Object.hash(runtimeType,_this.contextText,_this.youtubeUrl,_this.questionCount,const DeepCollectionEquality().hash(_this.questionTypes),_this.difficulty,_this.language,_this.extraInstructions,_this.providerId,_this.model);
+  return Object.hash(runtimeType,_this.contextText,_this.youtubeUrl,_this.questionCount,const DeepCollectionEquality().hash(_this.questionTypes),_this.difficulty,_this.language,_this.extraInstructions,_this.topic,_this.providerId,_this.model);
 }
 
 @override
 String toString() {
   final _this = this as QuizGenerationRequest;
-  return 'QuizGenerationRequest(contextText: ${_this.contextText}, youtubeUrl: ${_this.youtubeUrl}, questionCount: ${_this.questionCount}, questionTypes: ${_this.questionTypes}, difficulty: ${_this.difficulty}, language: ${_this.language}, extraInstructions: ${_this.extraInstructions}, providerId: ${_this.providerId}, model: ${_this.model})';
+  return 'QuizGenerationRequest(contextText: ${_this.contextText}, youtubeUrl: ${_this.youtubeUrl}, questionCount: ${_this.questionCount}, questionTypes: ${_this.questionTypes}, difficulty: ${_this.difficulty}, language: ${_this.language}, extraInstructions: ${_this.extraInstructions}, topic: ${_this.topic}, providerId: ${_this.providerId}, model: ${_this.model})';
 }
 
 
@@ -54,7 +55,7 @@ abstract mixin class $QuizGenerationRequestCopyWith<$Res>  {
   factory $QuizGenerationRequestCopyWith(QuizGenerationRequest value, $Res Function(QuizGenerationRequest) _then) = _$QuizGenerationRequestCopyWithImpl;
 @useResult
 $Res call({
- String? contextText, String? youtubeUrl, int questionCount, Set<QuestionType> questionTypes, Difficulty difficulty, String? language, String? extraInstructions, LlmProviderId? providerId, String? model
+ String? contextText, String? youtubeUrl, int questionCount, Set<QuestionType> questionTypes, Difficulty difficulty, String? language, String? extraInstructions, String? topic, LlmProviderId? providerId, String? model
 });
 
 
@@ -71,7 +72,7 @@ class _$QuizGenerationRequestCopyWithImpl<$Res>
 
 /// Create a copy of QuizGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? questionCount = null,Object? questionTypes = null,Object? difficulty = null,Object? language = freezed,Object? extraInstructions = freezed,Object? providerId = freezed,Object? model = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? questionCount = null,Object? questionTypes = null,Object? difficulty = null,Object? language = freezed,Object? extraInstructions = freezed,Object? topic = freezed,Object? providerId = freezed,Object? model = freezed,}) {
   return _then(QuizGenerationRequest(
 contextText: freezed == contextText ? _self.contextText : contextText // ignore: cast_nullable_to_non_nullable
 as String?,youtubeUrl: freezed == youtubeUrl ? _self.youtubeUrl : youtubeUrl // ignore: cast_nullable_to_non_nullable
@@ -80,6 +81,7 @@ as int,questionTypes: null == questionTypes ? _self.questionTypes : questionType
 as Set<QuestionType>,difficulty: null == difficulty ? _self.difficulty : difficulty // ignore: cast_nullable_to_non_nullable
 as Difficulty,language: freezed == language ? _self.language : language // ignore: cast_nullable_to_non_nullable
 as String?,extraInstructions: freezed == extraInstructions ? _self.extraInstructions : extraInstructions // ignore: cast_nullable_to_non_nullable
+as String?,topic: freezed == topic ? _self.topic : topic // ignore: cast_nullable_to_non_nullable
 as String?,providerId: freezed == providerId ? _self.providerId : providerId // ignore: cast_nullable_to_non_nullable
 as LlmProviderId?,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
 as String?,
@@ -167,10 +169,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _QuizGenerationRequest() when $default != null:
-return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   return orElse();
 
 }
@@ -188,10 +190,10 @@ return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.que
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)  $default,) {final _that = this;
 switch (_that) {
 case _QuizGenerationRequest():
-return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -208,10 +210,10 @@ return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.que
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String? contextText,  String? youtubeUrl,  int questionCount,  Set<QuestionType> questionTypes,  Difficulty difficulty,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)?  $default,) {final _that = this;
 switch (_that) {
 case _QuizGenerationRequest() when $default != null:
-return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.questionTypes,_that.difficulty,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   return null;
 
 }
@@ -223,7 +225,7 @@ return $default(_that.contextText,_that.youtubeUrl,_that.questionCount,_that.que
 
 
 class _QuizGenerationRequest implements QuizGenerationRequest {
-  const _QuizGenerationRequest({this.contextText, this.youtubeUrl, this.questionCount = 10,  Set<QuestionType> questionTypes = const {QuestionType.mcqSingle, QuestionType.mcqMulti, QuestionType.trueFalse, QuestionType.shortAnswer}, this.difficulty = Difficulty.medium, this.language, this.extraInstructions, this.providerId, this.model}): _questionTypes = questionTypes;
+  const _QuizGenerationRequest({this.contextText, this.youtubeUrl, this.questionCount = 10,  Set<QuestionType> questionTypes = const {QuestionType.mcqSingle, QuestionType.mcqMulti, QuestionType.trueFalse, QuestionType.shortAnswer}, this.difficulty = Difficulty.medium, this.language, this.extraInstructions, this.topic, this.providerId, this.model}): _questionTypes = questionTypes;
   
 
 /// Pasted source material. At least one of [contextText]/[youtubeUrl].
@@ -241,6 +243,8 @@ class _QuizGenerationRequest implements QuizGenerationRequest {
 /// Output language (e.g. `en`); null = same as the source.
 @override final  String? language;
 @override final  String? extraInstructions;
+/// Subject or note title, gives the model context (optional).
+@override final  String? topic;
 /// Overrides; null = selection from `ApiKeyStore`.
 @override final  LlmProviderId? providerId;
 @override final  String? model;
@@ -255,18 +259,18 @@ _$QuizGenerationRequestCopyWith<_QuizGenerationRequest> get copyWith => __$QuizG
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _QuizGenerationRequest&&(identical(other.contextText, contextText) || other.contextText == contextText)&&(identical(other.youtubeUrl, youtubeUrl) || other.youtubeUrl == youtubeUrl)&&(identical(other.questionCount, questionCount) || other.questionCount == questionCount)&&const DeepCollectionEquality().equals(other.questionTypes, _questionTypes)&&(identical(other.difficulty, difficulty) || other.difficulty == difficulty)&&(identical(other.language, language) || other.language == language)&&(identical(other.extraInstructions, extraInstructions) || other.extraInstructions == extraInstructions)&&(identical(other.providerId, providerId) || other.providerId == providerId)&&(identical(other.model, model) || other.model == model));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _QuizGenerationRequest&&(identical(other.contextText, contextText) || other.contextText == contextText)&&(identical(other.youtubeUrl, youtubeUrl) || other.youtubeUrl == youtubeUrl)&&(identical(other.questionCount, questionCount) || other.questionCount == questionCount)&&const DeepCollectionEquality().equals(other.questionTypes, _questionTypes)&&(identical(other.difficulty, difficulty) || other.difficulty == difficulty)&&(identical(other.language, language) || other.language == language)&&(identical(other.extraInstructions, extraInstructions) || other.extraInstructions == extraInstructions)&&(identical(other.topic, topic) || other.topic == topic)&&(identical(other.providerId, providerId) || other.providerId == providerId)&&(identical(other.model, model) || other.model == model));
 }
 
 
 @override
 int get hashCode {
-    return Object.hash(runtimeType,contextText,youtubeUrl,questionCount,const DeepCollectionEquality().hash(_questionTypes),difficulty,language,extraInstructions,providerId,model);
+    return Object.hash(runtimeType,contextText,youtubeUrl,questionCount,const DeepCollectionEquality().hash(_questionTypes),difficulty,language,extraInstructions,topic,providerId,model);
 }
 
 @override
 String toString() {
-    return 'QuizGenerationRequest(contextText: $contextText, youtubeUrl: $youtubeUrl, questionCount: $questionCount, questionTypes: $questionTypes, difficulty: $difficulty, language: $language, extraInstructions: $extraInstructions, providerId: $providerId, model: $model)';
+    return 'QuizGenerationRequest(contextText: $contextText, youtubeUrl: $youtubeUrl, questionCount: $questionCount, questionTypes: $questionTypes, difficulty: $difficulty, language: $language, extraInstructions: $extraInstructions, topic: $topic, providerId: $providerId, model: $model)';
 }
 
 
@@ -277,7 +281,7 @@ abstract mixin class _$QuizGenerationRequestCopyWith<$Res> implements $QuizGener
   factory _$QuizGenerationRequestCopyWith(_QuizGenerationRequest value, $Res Function(_QuizGenerationRequest) _then) = __$QuizGenerationRequestCopyWithImpl;
 @override @useResult
 $Res call({
- String? contextText, String? youtubeUrl, int questionCount, Set<QuestionType> questionTypes, Difficulty difficulty, String? language, String? extraInstructions, LlmProviderId? providerId, String? model
+ String? contextText, String? youtubeUrl, int questionCount, Set<QuestionType> questionTypes, Difficulty difficulty, String? language, String? extraInstructions, String? topic, LlmProviderId? providerId, String? model
 });
 
 
@@ -294,7 +298,7 @@ class __$QuizGenerationRequestCopyWithImpl<$Res>
 
 /// Create a copy of QuizGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? questionCount = null,Object? questionTypes = null,Object? difficulty = null,Object? language = freezed,Object? extraInstructions = freezed,Object? providerId = freezed,Object? model = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? questionCount = null,Object? questionTypes = null,Object? difficulty = null,Object? language = freezed,Object? extraInstructions = freezed,Object? topic = freezed,Object? providerId = freezed,Object? model = freezed,}) {
   return _then(_QuizGenerationRequest(
 contextText: freezed == contextText ? _self.contextText : contextText // ignore: cast_nullable_to_non_nullable
 as String?,youtubeUrl: freezed == youtubeUrl ? _self.youtubeUrl : youtubeUrl // ignore: cast_nullable_to_non_nullable
@@ -303,6 +307,7 @@ as int,questionTypes: null == questionTypes ? _self._questionTypes : questionTyp
 as Set<QuestionType>,difficulty: null == difficulty ? _self.difficulty : difficulty // ignore: cast_nullable_to_non_nullable
 as Difficulty,language: freezed == language ? _self.language : language // ignore: cast_nullable_to_non_nullable
 as String?,extraInstructions: freezed == extraInstructions ? _self.extraInstructions : extraInstructions // ignore: cast_nullable_to_non_nullable
+as String?,topic: freezed == topic ? _self.topic : topic // ignore: cast_nullable_to_non_nullable
 as String?,providerId: freezed == providerId ? _self.providerId : providerId // ignore: cast_nullable_to_non_nullable
 as LlmProviderId?,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
 as String?,
@@ -316,7 +321,8 @@ as String?,
 mixin _$NoteGenerationRequest {
 
  String? get contextText; String? get youtubeUrl; String? get language;/// e.g. "concise summary", "detailed study notes with headings".
- String? get extraInstructions; LlmProviderId? get providerId; String? get model;
+ String? get extraInstructions;/// Subject title, gives the model context (optional).
+ String? get topic; LlmProviderId? get providerId; String? get model;
 /// Create a copy of NoteGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -328,20 +334,20 @@ $NoteGenerationRequestCopyWith<NoteGenerationRequest> get copyWith => _$NoteGene
 @override
 bool operator ==(Object other) {
   final _this = this as NoteGenerationRequest;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NoteGenerationRequest&&(identical(other.contextText, _this.contextText) || other.contextText == _this.contextText)&&(identical(other.youtubeUrl, _this.youtubeUrl) || other.youtubeUrl == _this.youtubeUrl)&&(identical(other.language, _this.language) || other.language == _this.language)&&(identical(other.extraInstructions, _this.extraInstructions) || other.extraInstructions == _this.extraInstructions)&&(identical(other.providerId, _this.providerId) || other.providerId == _this.providerId)&&(identical(other.model, _this.model) || other.model == _this.model));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NoteGenerationRequest&&(identical(other.contextText, _this.contextText) || other.contextText == _this.contextText)&&(identical(other.youtubeUrl, _this.youtubeUrl) || other.youtubeUrl == _this.youtubeUrl)&&(identical(other.language, _this.language) || other.language == _this.language)&&(identical(other.extraInstructions, _this.extraInstructions) || other.extraInstructions == _this.extraInstructions)&&(identical(other.topic, _this.topic) || other.topic == _this.topic)&&(identical(other.providerId, _this.providerId) || other.providerId == _this.providerId)&&(identical(other.model, _this.model) || other.model == _this.model));
 }
 
 
 @override
 int get hashCode {
   final _this = this as NoteGenerationRequest;
-  return Object.hash(runtimeType,_this.contextText,_this.youtubeUrl,_this.language,_this.extraInstructions,_this.providerId,_this.model);
+  return Object.hash(runtimeType,_this.contextText,_this.youtubeUrl,_this.language,_this.extraInstructions,_this.topic,_this.providerId,_this.model);
 }
 
 @override
 String toString() {
   final _this = this as NoteGenerationRequest;
-  return 'NoteGenerationRequest(contextText: ${_this.contextText}, youtubeUrl: ${_this.youtubeUrl}, language: ${_this.language}, extraInstructions: ${_this.extraInstructions}, providerId: ${_this.providerId}, model: ${_this.model})';
+  return 'NoteGenerationRequest(contextText: ${_this.contextText}, youtubeUrl: ${_this.youtubeUrl}, language: ${_this.language}, extraInstructions: ${_this.extraInstructions}, topic: ${_this.topic}, providerId: ${_this.providerId}, model: ${_this.model})';
 }
 
 
@@ -352,7 +358,7 @@ abstract mixin class $NoteGenerationRequestCopyWith<$Res>  {
   factory $NoteGenerationRequestCopyWith(NoteGenerationRequest value, $Res Function(NoteGenerationRequest) _then) = _$NoteGenerationRequestCopyWithImpl;
 @useResult
 $Res call({
- String? contextText, String? youtubeUrl, String? language, String? extraInstructions, LlmProviderId? providerId, String? model
+ String? contextText, String? youtubeUrl, String? language, String? extraInstructions, String? topic, LlmProviderId? providerId, String? model
 });
 
 
@@ -369,12 +375,13 @@ class _$NoteGenerationRequestCopyWithImpl<$Res>
 
 /// Create a copy of NoteGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? language = freezed,Object? extraInstructions = freezed,Object? providerId = freezed,Object? model = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? language = freezed,Object? extraInstructions = freezed,Object? topic = freezed,Object? providerId = freezed,Object? model = freezed,}) {
   return _then(NoteGenerationRequest(
 contextText: freezed == contextText ? _self.contextText : contextText // ignore: cast_nullable_to_non_nullable
 as String?,youtubeUrl: freezed == youtubeUrl ? _self.youtubeUrl : youtubeUrl // ignore: cast_nullable_to_non_nullable
 as String?,language: freezed == language ? _self.language : language // ignore: cast_nullable_to_non_nullable
 as String?,extraInstructions: freezed == extraInstructions ? _self.extraInstructions : extraInstructions // ignore: cast_nullable_to_non_nullable
+as String?,topic: freezed == topic ? _self.topic : topic // ignore: cast_nullable_to_non_nullable
 as String?,providerId: freezed == providerId ? _self.providerId : providerId // ignore: cast_nullable_to_non_nullable
 as LlmProviderId?,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
 as String?,
@@ -462,10 +469,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _NoteGenerationRequest() when $default != null:
-return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   return orElse();
 
 }
@@ -483,10 +490,10 @@ return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraIns
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)  $default,) {final _that = this;
 switch (_that) {
 case _NoteGenerationRequest():
-return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -503,10 +510,10 @@ return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraIns
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  LlmProviderId? providerId,  String? model)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String? contextText,  String? youtubeUrl,  String? language,  String? extraInstructions,  String? topic,  LlmProviderId? providerId,  String? model)?  $default,) {final _that = this;
 switch (_that) {
 case _NoteGenerationRequest() when $default != null:
-return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.providerId,_that.model);case _:
+return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraInstructions,_that.topic,_that.providerId,_that.model);case _:
   return null;
 
 }
@@ -518,7 +525,7 @@ return $default(_that.contextText,_that.youtubeUrl,_that.language,_that.extraIns
 
 
 class _NoteGenerationRequest implements NoteGenerationRequest {
-  const _NoteGenerationRequest({this.contextText, this.youtubeUrl, this.language, this.extraInstructions, this.providerId, this.model});
+  const _NoteGenerationRequest({this.contextText, this.youtubeUrl, this.language, this.extraInstructions, this.topic, this.providerId, this.model});
   
 
 @override final  String? contextText;
@@ -526,6 +533,8 @@ class _NoteGenerationRequest implements NoteGenerationRequest {
 @override final  String? language;
 /// e.g. "concise summary", "detailed study notes with headings".
 @override final  String? extraInstructions;
+/// Subject title, gives the model context (optional).
+@override final  String? topic;
 @override final  LlmProviderId? providerId;
 @override final  String? model;
 
@@ -539,18 +548,18 @@ _$NoteGenerationRequestCopyWith<_NoteGenerationRequest> get copyWith => __$NoteG
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _NoteGenerationRequest&&(identical(other.contextText, contextText) || other.contextText == contextText)&&(identical(other.youtubeUrl, youtubeUrl) || other.youtubeUrl == youtubeUrl)&&(identical(other.language, language) || other.language == language)&&(identical(other.extraInstructions, extraInstructions) || other.extraInstructions == extraInstructions)&&(identical(other.providerId, providerId) || other.providerId == providerId)&&(identical(other.model, model) || other.model == model));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _NoteGenerationRequest&&(identical(other.contextText, contextText) || other.contextText == contextText)&&(identical(other.youtubeUrl, youtubeUrl) || other.youtubeUrl == youtubeUrl)&&(identical(other.language, language) || other.language == language)&&(identical(other.extraInstructions, extraInstructions) || other.extraInstructions == extraInstructions)&&(identical(other.topic, topic) || other.topic == topic)&&(identical(other.providerId, providerId) || other.providerId == providerId)&&(identical(other.model, model) || other.model == model));
 }
 
 
 @override
 int get hashCode {
-    return Object.hash(runtimeType,contextText,youtubeUrl,language,extraInstructions,providerId,model);
+    return Object.hash(runtimeType,contextText,youtubeUrl,language,extraInstructions,topic,providerId,model);
 }
 
 @override
 String toString() {
-    return 'NoteGenerationRequest(contextText: $contextText, youtubeUrl: $youtubeUrl, language: $language, extraInstructions: $extraInstructions, providerId: $providerId, model: $model)';
+    return 'NoteGenerationRequest(contextText: $contextText, youtubeUrl: $youtubeUrl, language: $language, extraInstructions: $extraInstructions, topic: $topic, providerId: $providerId, model: $model)';
 }
 
 
@@ -561,7 +570,7 @@ abstract mixin class _$NoteGenerationRequestCopyWith<$Res> implements $NoteGener
   factory _$NoteGenerationRequestCopyWith(_NoteGenerationRequest value, $Res Function(_NoteGenerationRequest) _then) = __$NoteGenerationRequestCopyWithImpl;
 @override @useResult
 $Res call({
- String? contextText, String? youtubeUrl, String? language, String? extraInstructions, LlmProviderId? providerId, String? model
+ String? contextText, String? youtubeUrl, String? language, String? extraInstructions, String? topic, LlmProviderId? providerId, String? model
 });
 
 
@@ -578,12 +587,13 @@ class __$NoteGenerationRequestCopyWithImpl<$Res>
 
 /// Create a copy of NoteGenerationRequest
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? language = freezed,Object? extraInstructions = freezed,Object? providerId = freezed,Object? model = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? contextText = freezed,Object? youtubeUrl = freezed,Object? language = freezed,Object? extraInstructions = freezed,Object? topic = freezed,Object? providerId = freezed,Object? model = freezed,}) {
   return _then(_NoteGenerationRequest(
 contextText: freezed == contextText ? _self.contextText : contextText // ignore: cast_nullable_to_non_nullable
 as String?,youtubeUrl: freezed == youtubeUrl ? _self.youtubeUrl : youtubeUrl // ignore: cast_nullable_to_non_nullable
 as String?,language: freezed == language ? _self.language : language // ignore: cast_nullable_to_non_nullable
 as String?,extraInstructions: freezed == extraInstructions ? _self.extraInstructions : extraInstructions // ignore: cast_nullable_to_non_nullable
+as String?,topic: freezed == topic ? _self.topic : topic // ignore: cast_nullable_to_non_nullable
 as String?,providerId: freezed == providerId ? _self.providerId : providerId // ignore: cast_nullable_to_non_nullable
 as LlmProviderId?,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
 as String?,
