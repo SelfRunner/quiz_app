@@ -4,6 +4,7 @@
 library;
 
 export '../theme/app_theme.dart';
+export 'ai_gate.dart';
 export 'app_card.dart';
 export 'info_banner.dart';
 export 'keyboard_shortcut_hint.dart';
