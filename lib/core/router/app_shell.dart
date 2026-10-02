@@ -15,7 +15,8 @@ import '../widgets/responsive.dart';
 import '../widgets/sync_status_indicator.dart';
 import 'routes.dart';
 
-/// Top-level navigation (Subjects / Shared / Settings). Bottom bar on narrow
+/// Top-level navigation (Home / Subjects / Study / Shared / Settings; Study
+/// shows a badge with today's due cards). Bottom bar on narrow
 /// screens; on wide screens a sidebar-style rail (app mark, destinations,
 /// sync status and sign-out at the bottom) that extends with labels from the
 /// expanded breakpoint. Also
@@ -30,15 +31,34 @@ class AppShell extends ConsumerStatefulWidget {
   static const String appName = 'Quiz & Notes';
 
   static const _tabs = [
+    (AppRoutes.home, Icons.home_outlined, Icons.home, 'Home'),
     (
       AppRoutes.subjects,
       Icons.library_books_outlined,
       Icons.library_books,
       'Subjects',
     ),
+    (AppRoutes.study, Icons.style_outlined, Icons.style, 'Study'),
     (AppRoutes.shared, Icons.people_outline, Icons.people, 'Shared'),
     (AppRoutes.settings, Icons.settings_outlined, Icons.settings, 'Settings'),
   ];
+
+  /// Index of the Study destination (carries the due-count badge).
+  static const int _studyIndex = 2;
+
+  /// Key of the due-count badge on the Study destination.
+  static const Key studyBadgeKey = Key('nav-study-badge');
+
+  /// Index of the destination for [location] (Subjects for `/` and any
+  /// unknown shell location).
+  static int indexFor(String location) {
+    for (final (i, t) in _tabs.indexed) {
+      final path = t.$1;
+      if (path == AppRoutes.subjects) continue;
+      if (location == path || location.startsWith('$path/')) return i;
+    }
+    return 1;
+  }
 
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
@@ -47,11 +67,17 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> {
   StreamSubscription<SyncRejection>? _rejections;
 
-  int get _index {
-    for (var i = AppShell._tabs.length - 1; i > 0; i--) {
-      if (widget.location.startsWith(AppShell._tabs[i].$1)) return i;
-    }
-    return 0;
+  int get _index => AppShell.indexFor(widget.location);
+
+  /// Destination icon, with the due-card badge on Study.
+  Widget _icon(int i, IconData icon, int due) {
+    final child = Icon(icon);
+    if (i != AppShell._studyIndex || due <= 0) return child;
+    return Badge(
+      key: AppShell.studyBadgeKey,
+      label: Text(due > 99 ? '99+' : '$due'),
+      child: child,
+    );
   }
 
   @override
@@ -90,6 +116,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   Widget build(BuildContext context) {
     final wide = Breakpoints.isMedium(context);
+    final due = ref.watch(dueCountProvider).value ?? 0;
     if (wide) {
       final extended = Breakpoints.isExpanded(context);
       final railTheme = NavigationRailTheme.of(context);
@@ -139,10 +166,10 @@ class _AppShellState extends ConsumerState<AppShell> {
                 ),
               ),
               destinations: [
-                for (final t in AppShell._tabs)
+                for (final (i, t) in AppShell._tabs.indexed)
                   NavigationRailDestination(
-                    icon: Icon(t.$2),
-                    selectedIcon: Icon(t.$3),
+                    icon: _icon(i, t.$2, due),
+                    selectedIcon: _icon(i, t.$3, due),
                     label: Text(t.$4),
                   ),
               ],
@@ -183,11 +210,14 @@ class _AppShellState extends ConsumerState<AppShell> {
           selectedIndex: _index,
           onDestinationSelected: _go,
           destinations: [
-            for (final t in AppShell._tabs)
+            for (final (i, t) in AppShell._tabs.indexed)
               NavigationDestination(
-                icon: Icon(t.$2),
-                selectedIcon: Icon(t.$3),
+                icon: _icon(i, t.$2, due),
+                selectedIcon: _icon(i, t.$3, due),
                 label: t.$4,
+                tooltip: i == AppShell._studyIndex && due > 0
+                    ? 'Study, $due due'
+                    : null,
               ),
           ],
         ),

@@ -173,6 +173,7 @@ void main() {
     }
 
     await tester.enterText(find.byKey(const Key('ai-api-key')), 'g-key');
+    await tester.pump(); // Save enables once the form is dirty.
     await tester.tap(find.byKey(const Key('ai-save')));
     await tester.pumpAndSettle();
     expect(
@@ -255,5 +256,35 @@ void main() {
     await tester.tap(find.byKey(const Key('settings-sync')));
     await tester.pumpAndSettle();
     expect(deps.sync.syncCalls, 1);
+  });
+
+  testWidgets('Save is disabled until the form changes; contextual hint', (
+    tester,
+  ) async {
+    await _pump(tester, TestDeps());
+    FilledButton save() =>
+        tester.widget<FilledButton>(find.byKey(const Key('ai-save')));
+    expect(save().onPressed, isNull);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('ai-save')),
+        matching: find.text('Save'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Saved'), findsNothing);
+    expect(
+      find.text('Add an API key below to use AI features.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('in Settings'), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('ai-api-key')), 'sk-1');
+    await tester.pump();
+    expect(save().onPressed, isNotNull);
+    await tester.tap(find.byKey(const Key('ai-save')));
+    await tester.pumpAndSettle();
+    expect(save().onPressed, isNull);
+    expect(find.text('Saved'), findsOneWidget);
   });
 }

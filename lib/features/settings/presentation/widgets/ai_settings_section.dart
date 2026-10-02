@@ -623,14 +623,20 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 ),
                 FilledButton.icon(
                   key: const Key('ai-save'),
-                  onPressed: _saving ? null : _save,
+                  // Enabled only when the form differs from what is stored.
+                  onPressed: _saving || !_dirty ? null : _save,
                   icon: _saving
                       ? const SizedBox.square(
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.check, size: 18),
-                  label: Text(_dirty ? 'Save' : 'Saved'),
+                  label: Text(
+                    !_dirty &&
+                            (_hasStoredKey || _configured.contains(_provider))
+                        ? 'Saved'
+                        : 'Save',
+                  ),
                 ),
               ],
             ),
@@ -674,9 +680,20 @@ class AiReadinessBanner extends ConsumerWidget {
         AiReadinessIssue.missingModel => 'Choose a model',
         _ => 'AI is not set up',
       },
-      message:
+      // Already on Settings: point at the form instead of "in Settings".
+      message: switch (readiness.issue) {
+        AiReadinessIssue.noProvider =>
+          'Add an API key below to use AI features.',
+        AiReadinessIssue.missingApiKey =>
+          'Add your ${readiness.providerId?.displayName ?? 'provider'} API '
+              'key below.',
+        AiReadinessIssue.missingModel =>
+          'Choose a model for your '
+              '${readiness.providerId?.displayName ?? 'AI'} endpoint below.',
+        _ =>
           readiness.reason ??
-          'Add an API key and choose a model to use AI features.',
+              'Add an API key and choose a model to use AI features.',
+      },
     );
   }
 }

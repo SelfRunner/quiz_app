@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:quiz_app/app.dart';
+import 'package:quiz_app/core/router/app_router.dart';
 import 'package:quiz_app/data/data_providers.dart';
 import 'package:quiz_app/data/models/models.dart';
 import 'package:quiz_app/data/repositories/auth_repository.dart';
+import 'package:quiz_app/features/dashboard/presentation/dashboard_screen.dart';
+import 'package:quiz_app/features/subjects/presentation/subjects_screen.dart';
 
 class _FakeAuth implements AuthRepository {
   _FakeAuth(this._user);
@@ -62,8 +65,22 @@ void main() {
 
     await auth.signIn(email: 'a@b.c', password: 'x');
     await tester.pumpAndSettle();
+    // Signed in on /login -> the dashboard (/home).
+    final router = ProviderScope.containerOf(
+      tester.element(find.byType(QuizApp)),
+    ).read(routerProvider);
+    expect(router.state.matchedLocation, '/home');
+    expect(find.byType(DashboardScreen), findsOneWidget);
     expect(find.text('Subjects'), findsWidgets);
     // Default test surface is 800px wide -> navigation rail.
     expect(find.byType(NavigationRail), findsOneWidget);
+
+    // Auth screens keep redirecting to /home; '/' stays Subjects.
+    router.go('/signup');
+    await tester.pumpAndSettle();
+    expect(router.state.matchedLocation, '/home');
+    router.go('/');
+    await tester.pumpAndSettle();
+    expect(find.byType(SubjectsScreen), findsOneWidget);
   });
 }

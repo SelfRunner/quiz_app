@@ -26,8 +26,9 @@ import '../../features/subjects/presentation/subjects_screen.dart';
 import 'app_shell.dart';
 import 'routes.dart';
 
-/// App router. Redirects to /login when signed out and away from auth
-/// screens when signed in. Re-evaluated on every auth state change.
+/// App router. Redirects to /login when signed out and from the auth
+/// screens to the dashboard (/home) when signed in. Re-evaluated on every
+/// auth state change.
 final routerProvider = Provider<GoRouter>((ref) {
   final auth = ref.watch(authRepositoryProvider);
   final refresh = _StreamListenable(auth.authStateChanges());
@@ -40,7 +41,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final signedIn = auth.currentUser != null;
       final onPublic = AppRoutes.public.contains(state.matchedLocation);
       if (!signedIn && !onPublic) return AppRoutes.login;
-      if (signedIn && onPublic) return AppRoutes.subjects;
+      if (signedIn && onPublic) return AppRoutes.home;
       return null;
     },
     routes: [

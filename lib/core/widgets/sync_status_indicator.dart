@@ -25,6 +25,18 @@ String describeSyncStatus(SyncStatus status, {DateTime? now}) {
   };
 }
 
+/// Short accessibility label for the sync button ("Sync status: Synced").
+String syncStatusSemanticsLabel(SyncStatus status) {
+  final state = switch (status.state) {
+    SyncState.syncing => 'Syncing',
+    SyncState.offline => 'Offline',
+    SyncState.error => 'Problem',
+    SyncState.idle when status.pendingOps > 0 => '${status.pendingOps} waiting',
+    SyncState.idle => status.lastSyncedAt == null ? 'Not synced' : 'Synced',
+  };
+  return 'Sync status: $state';
+}
+
 /// "just now", "5 min ago", "today 14:03", "Mar 3, 14:03".
 String formatRelativeTime(DateTime time, {DateTime? now}) {
   final current = (now ?? DateTime.now()).toUtc();
@@ -57,14 +69,24 @@ class SyncStatusButton extends ConsumerWidget {
     final status = ref.watch(syncStatusProvider).value;
     if (status == null) return const SizedBox.shrink();
     final icon = syncStatusIcon(context, status);
-    return IconButton(
-      tooltip: '${describeSyncStatus(status)}\nTap for details',
-      icon: Badge(
-        isLabelVisible: status.pendingOps > 0,
-        label: Text('${status.pendingOps}'),
-        child: icon,
+    void open() => showSyncDetailsDialog(context);
+    // One short semantics label: on Flutter web a long (multi-line) tooltip
+    // is rendered as DOM text that spills over neighbouring buttons.
+    return Semantics(
+      container: true,
+      button: true,
+      label: syncStatusSemanticsLabel(status),
+      onTap: open,
+      excludeSemantics: true,
+      child: IconButton(
+        tooltip: describeSyncStatus(status),
+        icon: Badge(
+          isLabelVisible: status.pendingOps > 0,
+          label: Text('${status.pendingOps}'),
+          child: icon,
+        ),
+        onPressed: open,
       ),
-      onPressed: () => showSyncDetailsDialog(context),
     );
   }
 }
