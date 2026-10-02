@@ -5,10 +5,10 @@ begin;
 create extension if not exists pgtap with schema extensions;
 select plan(16);
 
-insert into auth.users (id, email, raw_user_meta_data) values
-  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{}'),
-  ('22222222-2222-4222-8222-222222222222', 'bob@example.com',   '{}'),
-  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}');
+insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values
+  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{}', now()),
+  ('22222222-2222-4222-8222-222222222222', 'bob@example.com',   '{}', now()),
+  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}', now());
 
 select results_eq($$ select public from storage.buckets where id = 'note-images' $$,
                   $$ values (false) $$, 'bucket note-images exists and is private');

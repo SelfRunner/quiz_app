@@ -1,15 +1,15 @@
 -- RLS / trigger tests: owner CRUD, subject/note/quiz shares, revoke,
--- tombstones, attempts privacy, profiles, owner_id immutability, injection.
+-- soft-deleted rows hidden from recipients, attempts privacy, profiles, owner_id immutability, injection.
 -- Run with `supabase test db` (or supabase/tests/local_stubs/run_local.sh).
 begin;
 create extension if not exists pgtap with schema extensions;
 select plan(75);
 
 -- Users: A = alice (owner), B = bob (recipient), C = carol (stranger)
-insert into auth.users (id, email, raw_user_meta_data) values
-  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{"display_name":"Alice"}'),
-  ('22222222-2222-4222-8222-222222222222', 'bob@example.com',   '{"display_name":"Bob"}'),
-  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}');
+insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values
+  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{"display_name":"Alice"}', now()),
+  ('22222222-2222-4222-8222-222222222222', 'bob@example.com',   '{"display_name":"Bob"}', now()),
+  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}', now());
 
 select is((select display_name from public.profiles where id = '11111111-1111-4111-8111-111111111111'),
           'Alice', 'profile created by trigger with display_name from metadata');
@@ -219,10 +219,10 @@ update public.notes set deleted_at = now() where id = 'bbbbbbbb-0000-4000-8000-0
 select is((select count(*)::int from public.quiz_attempts), 0, 'A cannot see B''s attempts on A''s quiz');
 
 set local request.jwt.claims to '{"sub":"22222222-2222-4222-8222-222222222222","role":"authenticated"}';
-select is((select count(*)::int from public.notes where subject_id = 'aaaaaaaa-0000-4000-8000-000000000001'), 3,
-          'B sees notes added after the share (live subject share)');
-select isnt((select deleted_at from public.notes where id = 'bbbbbbbb-0000-4000-8000-000000000002'), null,
-            'B sees the tombstone of a soft-deleted note (so deletions sync)');
+select is((select count(*)::int from public.notes where subject_id = 'aaaaaaaa-0000-4000-8000-000000000001'), 2,
+          'B sees notes added after the share (live subject share), minus soft-deleted ones');
+select is((select count(*)::int from public.notes where id = 'bbbbbbbb-0000-4000-8000-000000000002'), 0,
+          'B no longer sees a soft-deleted note (client reconciles it away)');
 select is((select count(*)::int from public.quiz_attempts), 1, 'B sees own attempt');
 
 -- ============================================================ C (note share + stranger)
