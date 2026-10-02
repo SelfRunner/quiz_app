@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import '../../core/errors/app_exception.dart';
+import '../llm_chat.dart';
 import '../llm_provider.dart';
 import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
+import 'sse.dart';
 
 /// Google Gemini via the Generative Language API (`v1beta`).
 ///
@@ -25,7 +27,7 @@ import 'schema_adapters.dart';
 ///   retry of the same generation; Gemini deletes them after 48 h.
 /// * `GET {base}/v1beta/models` (paged) filtered to models whose
 ///   `supportedGenerationMethods` contain `generateContent`.
-class GeminiProvider extends HttpLlmProvider {
+class GeminiProvider extends HttpLlmProvider implements LlmChatProvider {
   GeminiProvider(
     super.config,
     super.client, {
@@ -154,6 +156,98 @@ class GeminiProvider extends HttpLlmProvider {
       );
     }
     return _parse(response);
+  }
+
+  // ---------------------------------------------------------------- chat
+
+  @override
+  Stream<LlmChatEvent> streamChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) => streamSse(
+    uri: joinUrl(
+      _base,
+      '/v1beta/models/${bareModel(config.model)}:streamGenerateContent',
+    ).replace(queryParameters: {'alt': 'sse'}),
+    headers: _headers,
+    body: () => _chatBody(messages, systemPrompt, attachments, maxOutputTokens),
+    parser: _GeminiStreamParser.new,
+    parseJson: _chatCompletion,
+    fallback: () => completeChat(
+      messages: messages,
+      systemPrompt: systemPrompt,
+      attachments: attachments,
+      maxOutputTokens: maxOutputTokens,
+    ),
+    streamRejection: RegExp('stream', caseSensitive: false),
+  );
+
+  @override
+  Future<LlmChatCompletion> completeChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) async {
+    final response = await postJson(
+      joinUrl(
+        _base,
+        '/v1beta/models/${bareModel(config.model)}:generateContent',
+      ),
+      headers: _headers,
+      body: await _chatBody(
+        messages,
+        systemPrompt,
+        attachments,
+        maxOutputTokens,
+      ),
+    );
+    return _chatCompletion(response);
+  }
+
+  Future<Map<String, Object?>> _chatBody(
+    List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments,
+    int? maxOutputTokens,
+  ) async {
+    final turns = normalizeChatMessages(messages);
+    if (turns.isEmpty) {
+      throw const ValidationException('Type a message first.');
+    }
+    ProviderLimits.gemini.check(attachments, displayName);
+    final mediaParts = await _attachmentParts(attachments);
+    return {
+      if (systemPrompt != null && systemPrompt.isNotEmpty)
+        'systemInstruction': {
+          'parts': [
+            {'text': systemPrompt},
+          ],
+        },
+      'contents': [
+        for (var i = 0; i < turns.length; i++)
+          {
+            'role': turns[i].role == LlmChatRole.user ? 'user' : 'model',
+            'parts': [
+              if (i == turns.length - 1) ...mediaParts,
+              {'text': turns[i].text},
+            ],
+          },
+      ],
+      if (maxOutputTokens != null)
+        'generationConfig': {'maxOutputTokens': maxOutputTokens},
+    };
+  }
+
+  static LlmChatCompletion _chatCompletion(Map<String, dynamic> response) {
+    final chunk = _GeminiChunk.parse(response);
+    return LlmChatCompletion(
+      chunk.text,
+      chunk.finish ?? LlmFinishReason.stop,
+      detail: chunk.finishDetail,
+    );
   }
 
   Future<List<Map<String, Object?>>> _attachmentParts(
@@ -349,4 +443,87 @@ class GeminiFile {
 
   /// `PROCESSING`, `ACTIVE` or `FAILED`.
   final String state;
+}
+
+/// Text and finish state of one `GenerateContentResponse` (a whole answer
+/// or one streamed chunk).
+class _GeminiChunk {
+  const _GeminiChunk(this.text, this.finish, this.finishDetail);
+
+  /// Throws for a blocked prompt or an in-stream `error` object.
+  factory _GeminiChunk.parse(Map<String, dynamic> json) {
+    final error = json['error'];
+    if (error is Map) {
+      final code = error['code'];
+      throw mapHttpError(
+        providerName: 'Google Gemini',
+        statusCode: code is int ? code : 500,
+        body: json,
+        rawBody: '',
+        apiKey: '',
+      );
+    }
+    final feedback = json['promptFeedback'];
+    if (feedback is Map && feedback['blockReason'] != null) {
+      throw AiException(
+        'Gemini blocked this request (${feedback['blockReason']}). Try '
+        'rephrasing or using different sources.',
+      );
+    }
+    final candidates = json['candidates'];
+    final candidate = candidates is List && candidates.isNotEmpty
+        ? candidates.first
+        : null;
+    if (candidate is! Map) return const _GeminiChunk('', null, null);
+    final parts = (candidate['content'] as Map?)?['parts'] as List? ?? const [];
+    final text = parts
+        .whereType<Map<Object?, Object?>>()
+        .where((p) => p['thought'] != true && p['text'] is String)
+        .map((p) => p['text']! as String)
+        .join();
+    final raw = candidate['finishReason'];
+    final finish = switch (raw) {
+      null || 'FINISH_REASON_UNSPECIFIED' => null,
+      'STOP' => LlmFinishReason.stop,
+      'MAX_TOKENS' => LlmFinishReason.length,
+      'SAFETY' ||
+      'RECITATION' ||
+      'BLOCKLIST' ||
+      'PROHIBITED_CONTENT' ||
+      'SPII' ||
+      'IMAGE_SAFETY' => LlmFinishReason.blocked,
+      _ => LlmFinishReason.other,
+    };
+    return _GeminiChunk(text, finish, raw is String ? raw : null);
+  }
+
+  final String text;
+  final LlmFinishReason? finish;
+  final String? finishDetail;
+}
+
+/// `streamGenerateContent?alt=sse`: every `data:` is a partial
+/// `GenerateContentResponse`; the last one carries `finishReason`.
+class _GeminiStreamParser implements SseChatParser {
+  LlmFinishReason? _finish;
+  String? _detail;
+
+  @override
+  Iterable<LlmChatEvent> onEvent(SseEvent event) {
+    final json = sseJson(event);
+    if (json == null) return const [];
+    final chunk = _GeminiChunk.parse(json);
+    if (chunk.finish != null) {
+      _finish = chunk.finish;
+      _detail = chunk.finishDetail;
+    }
+    return [if (chunk.text.isNotEmpty) LlmTextDelta(chunk.text)];
+  }
+
+  @override
+  LlmChatDone onEnd() {
+    final finish = _finish;
+    if (finish == null) throw streamInterrupted('Google Gemini');
+    return LlmChatDone(finish, detail: _detail);
+  }
 }

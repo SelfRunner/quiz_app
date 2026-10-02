@@ -3,11 +3,16 @@ import 'package:http/http.dart' as http;
 
 import '../data/data_providers.dart';
 import 'ai_capabilities.dart';
+import 'ai_chat_service.dart';
 import 'ai_readiness.dart';
 import 'ai_service.dart';
+import 'ai_tools_service.dart';
 import 'api_key_store.dart';
+import 'default_ai_chat_service.dart';
 import 'default_ai_service.dart';
+import 'default_ai_tools_service.dart';
 import 'llm_provider.dart';
+import 'llm_resolver.dart';
 import 'notifying_api_key_store.dart';
 import 'providers/default_llm_provider_factory.dart';
 import 'secure_api_key_store.dart';
@@ -82,6 +87,32 @@ final llmProviderFactoryProvider = Provider<LlmProviderFactory>(
 
 final transcriptServiceProvider = Provider<TranscriptService>(
   (ref) => YoutubeTranscriptService(),
+);
+
+/// Provider/key/model resolution shared by the Wave 3 services.
+final llmResolverProvider = Provider<LlmResolver>(
+  (ref) => LlmResolver(
+    keyStore: ref.watch(apiKeyStoreProvider),
+    providerFactory: ref.watch(llmProviderFactoryProvider),
+    capabilities: ref.watch(aiCapabilityResolverProvider),
+  ),
+);
+
+/// Chat with sources (streaming, citations). Override with a fake in UI
+/// tests.
+final aiChatServiceProvider = Provider<AiChatService>(
+  (ref) => DefaultAiChatService(
+    resolver: ref.watch(llmResolverProvider),
+    transcriptService: ref.watch(transcriptServiceProvider),
+  ),
+);
+
+/// Note tools, "Explain this" and short-answer grading.
+final aiToolsServiceProvider = Provider<AiToolsService>(
+  (ref) => DefaultAiToolsService(
+    resolver: ref.watch(llmResolverProvider),
+    transcriptService: ref.watch(transcriptServiceProvider),
+  ),
 );
 
 final aiServiceProvider = Provider<AiService>(

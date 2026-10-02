@@ -90,6 +90,20 @@ String normalizeMimeType(String name, String? mimeType) {
   return mime;
 }
 
+/// What an [AiSource] is, as reported in chat citations
+/// (`ChatCitation.type`).
+enum AiSourceType {
+  text('text'),
+  note('note'),
+  file('file'),
+  youtube('youtube');
+
+  const AiSourceType(this.wireName);
+
+  /// Stable lower-case name (`note`, `file`, ...), also used in prompts.
+  final String wireName;
+}
+
 /// One piece of source material for AI generation.
 ///
 /// * [TextSource]: pasted / typed text.
@@ -98,31 +112,54 @@ String normalizeMimeType(String name, String? mimeType) {
 ///   such as .txt/.md/.docx whose text is extracted in-app).
 /// * [YoutubeSource]: a YouTube URL (native for Gemini, transcript for
 ///   others).
+///
+/// [id] is optional and opaque to the AI layer: chat returns it in
+/// citations (`ChatCitation.id`) so the UI can open the cited note / file.
 @immutable
 sealed class AiSource {
-  const AiSource();
+  const AiSource({this.id});
+
+  /// Caller's id of the underlying entity (note id, attachment id, ...).
+  final String? id;
 
   /// Name shown to the model (and usable in UI chips).
   String get label;
+
+  /// Kind reported in chat citations.
+  AiSourceType get type;
 }
 
 final class TextSource extends AiSource {
-  const TextSource({required this.text, this.label = 'Pasted text'});
+  const TextSource({
+    required this.text,
+    this.label = 'Pasted text',
+    super.id,
+    this.type = AiSourceType.text,
+  });
 
   @override
   final String label;
   final String text;
 
+  /// Defaults to [AiSourceType.text]; pass [AiSourceType.file] for text
+  /// already extracted from an attachment so citations point at the file.
   @override
-  bool operator ==(Object other) =>
-      other is TextSource && other.label == label && other.text == text;
+  final AiSourceType type;
 
   @override
-  int get hashCode => Object.hash(label, text);
+  bool operator ==(Object other) =>
+      other is TextSource &&
+      other.label == label &&
+      other.text == text &&
+      other.id == id &&
+      other.type == type;
+
+  @override
+  int get hashCode => Object.hash(label, text, id, type);
 }
 
 final class NoteSource extends AiSource {
-  const NoteSource({required this.title, required this.markdown});
+  const NoteSource({required this.title, required this.markdown, super.id});
 
   final String title;
   final String markdown;
@@ -131,11 +168,17 @@ final class NoteSource extends AiSource {
   String get label => title;
 
   @override
-  bool operator ==(Object other) =>
-      other is NoteSource && other.title == title && other.markdown == markdown;
+  AiSourceType get type => AiSourceType.note;
 
   @override
-  int get hashCode => Object.hash(title, markdown);
+  bool operator ==(Object other) =>
+      other is NoteSource &&
+      other.title == title &&
+      other.markdown == markdown &&
+      other.id == id;
+
+  @override
+  int get hashCode => Object.hash(title, markdown, id);
 }
 
 final class FileSource extends AiSource {
@@ -143,6 +186,7 @@ final class FileSource extends AiSource {
     required this.name,
     required this.mimeType,
     required this.bytes,
+    super.id,
   });
 
   /// File name including the extension (used for type detection and shown
@@ -157,6 +201,9 @@ final class FileSource extends AiSource {
   @override
   String get label => name;
 
+  @override
+  AiSourceType get type => AiSourceType.file;
+
   /// [mimeType] normalized (see [normalizeMimeType]).
   String get effectiveMimeType => normalizeMimeType(name, mimeType);
 
@@ -168,23 +215,34 @@ final class FileSource extends AiSource {
       other is FileSource &&
       other.name == name &&
       other.mimeType == mimeType &&
+      other.id == id &&
       identical(other.bytes, bytes);
 
   @override
-  int get hashCode => Object.hash(name, mimeType, identityHashCode(bytes));
+  int get hashCode => Object.hash(name, mimeType, id, identityHashCode(bytes));
 }
 
 final class YoutubeSource extends AiSource {
-  const YoutubeSource(this.url);
+  const YoutubeSource(this.url, {super.id, this.title});
 
   final String url;
 
-  @override
-  String get label => 'YouTube video';
+  /// Video title if known (shown in chat source labels and citations).
+  final String? title;
 
   @override
-  bool operator ==(Object other) => other is YoutubeSource && other.url == url;
+  String get label => title ?? 'YouTube video';
 
   @override
-  int get hashCode => url.hashCode;
+  AiSourceType get type => AiSourceType.youtube;
+
+  @override
+  bool operator ==(Object other) =>
+      other is YoutubeSource &&
+      other.url == url &&
+      other.id == id &&
+      other.title == title;
+
+  @override
+  int get hashCode => Object.hash(url, id, title);
 }
