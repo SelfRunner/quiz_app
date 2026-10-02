@@ -101,8 +101,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/quizzes/:id',
-        builder: (context, state) =>
-            QuizDetailScreen(quizId: state.pathParameters['id']!),
+        builder: (context, state) => QuizDetailScreen(
+          quizId: state.pathParameters['id']!,
+          justCreated: state.uri.queryParameters['justCreated'] == '1',
+        ),
         routes: [
           GoRoute(
             path: 'edit',

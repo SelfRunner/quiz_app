@@ -179,7 +179,8 @@ void main() {
     await tester.pumpWidget(env.app('/quizzes/q1'));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Share'), findsNothing);
-    expect(find.byTooltip('Edit'), findsNothing);
+    expect(find.byTooltip('Edit quiz'), findsNothing);
+    expect(find.byKey(const Key('edit-questions')), findsNothing);
     expect(find.byKey(const Key('play-quiz')), findsOneWidget);
   });
 
@@ -236,7 +237,7 @@ void main() {
     env.quizzes.add(quiz('q1', [_q1]));
     await tester.pumpWidget(env.app('/quizzes/q1'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Edit'));
+    await tester.tap(find.byTooltip('Edit quiz'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('quiz-title')), 'Changed');
     await tester.pump();

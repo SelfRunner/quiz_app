@@ -7,6 +7,7 @@ import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/quiz.dart';
+import '../../../data/models/syncable.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
 import '../application/quiz_io_actions.dart';
 import 'quiz_format.dart';
@@ -129,6 +130,7 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
             ),
           ];
 
+    final userId = ref.watch(currentUserIdProvider);
     final count = quizzes.value?.length;
     final header = LayoutBuilder(
       builder: (context, constraints) {
@@ -169,7 +171,11 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final q in value)
-            _QuizTile(quiz: q, showNote: noteId == null && q.noteId != null),
+            _QuizTile(
+              quiz: q,
+              showNote: noteId == null && q.noteId != null,
+              canEdit: !widget.readOnly && q.isOwnedBy(userId),
+            ),
         ],
       ),
       AsyncValue(:final error?) => InfoBanner(
@@ -188,9 +194,16 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
 }
 
 class _QuizTile extends ConsumerWidget {
-  const _QuizTile({required this.quiz, this.showNote = false});
+  const _QuizTile({
+    required this.quiz,
+    this.showNote = false,
+    this.canEdit = false,
+  });
 
   final Quiz quiz;
+
+  /// Owned (and not read-only): the row menu offers "Edit questions".
+  final bool canEdit;
 
   /// Label the quiz with its note (subject-wide listing).
   final bool showNote;
@@ -295,6 +308,34 @@ class _QuizTile extends ConsumerWidget {
             tooltip: 'Play',
             icon: const Icon(Icons.play_arrow_rounded),
             onPressed: () => context.push(AppRoutes.quizPlay(quiz.id)),
+          ),
+        if (canEdit)
+          PopupMenuButton<String>(
+            key: ValueKey('quiz-row-menu-${quiz.id}'),
+            tooltip: 'Quiz actions',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) => switch (v) {
+              'edit' => context.push(AppRoutes.quizEdit(quiz.id)),
+              'open' => context.push(AppRoutes.quiz(quiz.id)),
+              _ => null,
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                key: ValueKey('quiz-row-edit-${quiz.id}'),
+                value: 'edit',
+                child: const ListTile(
+                  leading: Icon(Icons.edit_outlined),
+                  title: Text('Edit questions'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'open',
+                child: ListTile(
+                  leading: Icon(Icons.info_outline),
+                  title: Text('Details'),
+                ),
+              ),
+            ],
           ),
       ],
     );

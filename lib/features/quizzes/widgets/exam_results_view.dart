@@ -31,6 +31,7 @@ class ExamResultsView extends StatelessWidget {
     this.aiGrades = const {},
     this.partialIds = const {},
     this.gradingProgress,
+    this.onEditQuestions,
   });
 
   /// The completed attempt (graded answers, duration).
@@ -58,6 +59,9 @@ class ExamResultsView extends StatelessWidget {
 
   /// Batch AI grading progress (null when not grading).
   final ({int done, int total})? gradingProgress;
+
+  /// Opens the quiz editor (owners only; null hides the link).
+  final VoidCallback? onEditQuestions;
 
   bool _isPartial(QuestionAnswer? a) =>
       a != null && a.isCorrect == false && partialIds.contains(a.questionId);
@@ -178,6 +182,13 @@ class ExamResultsView extends StatelessWidget {
                 label: const Text('New exam'),
               ),
               OutlinedButton(onPressed: onDone, child: const Text('Done')),
+              if (onEditQuestions != null)
+                TextButton.icon(
+                  key: const Key('results-edit-questions'),
+                  onPressed: onEditQuestions,
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Edit questions'),
+                ),
             ],
           ),
         ],

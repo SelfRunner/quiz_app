@@ -6,6 +6,7 @@ import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/data_providers.dart';
 import '../../../data/models/quiz_attempt.dart';
+import '../../../data/models/syncable.dart';
 import '../application/attempt_recording.dart';
 import '../domain/exam_session.dart';
 import '../widgets/exam_player.dart';
@@ -62,6 +63,15 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
     }
   }
 
+  /// Leaves the results for the editor (back returns to the detail page).
+  void _editQuestions() {
+    if (context.canPop()) {
+      context.pushReplacement(AppRoutes.quizEdit(widget.quizId));
+    } else {
+      context.go(AppRoutes.quizEdit(widget.quizId));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final quizAsync = ref.watch(quizProvider(widget.quizId));
@@ -82,9 +92,16 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
       );
     }
 
+    final owner = quiz.isOwnedBy(ref.watch(currentUserIdProvider));
+    final onEdit = owner ? _editQuestions : null;
     switch (_mode) {
       case AttemptMode.exam:
-        return ExamPlayer(quiz: quiz, config: _examConfig, onClose: _close);
+        return ExamPlayer(
+          quiz: quiz,
+          config: _examConfig,
+          onClose: _close,
+          onEditQuestions: onEdit,
+        );
       case AttemptMode.practice:
         return PracticePlayer(
           title: quiz.title,
@@ -104,6 +121,7 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
           ),
           onClose: _close,
           quizFor: (_) => quiz,
+          onEditQuestions: onEdit,
         );
       case AttemptMode.mistakes:
         final groupsAsync = ref.watch(openMistakesProvider);
@@ -150,6 +168,7 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
           ),
           onClose: _close,
           quizFor: (_) => quiz,
+          onEditQuestions: onEdit,
         );
     }
   }

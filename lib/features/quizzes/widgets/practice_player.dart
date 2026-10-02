@@ -40,6 +40,7 @@ class PracticePlayer extends ConsumerStatefulWidget {
     this.icon = Icons.quiz_outlined,
     this.emptyMessage = 'This quiz has no questions yet.',
     this.quizFor,
+    this.onEditQuestions,
   });
 
   /// App bar title.
@@ -63,6 +64,9 @@ class PracticePlayer extends ConsumerStatefulWidget {
 
   /// The quiz a question belongs to ("Explain" uses its notes as context).
   final Quiz? Function(Question question)? quizFor;
+
+  /// "Edit questions" on the results (owners only).
+  final VoidCallback? onEditQuestions;
 
   @override
   ConsumerState<PracticePlayer> createState() => _PracticePlayerState();
@@ -347,6 +351,7 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
             : () => _start(session.missedQuestions, practice: true),
         onDone: widget.onClose,
         quizFor: widget.quizFor,
+        onEditQuestions: widget.onEditQuestions,
       ),
     };
 
