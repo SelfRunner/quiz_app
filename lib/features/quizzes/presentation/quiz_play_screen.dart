@@ -18,9 +18,12 @@ enum _Phase { setup, playing, results }
 /// Plays a quiz: options → one question per page → results. Saves a
 /// `QuizAttempt` owned by the player (also for shared quizzes).
 class QuizPlayScreen extends ConsumerStatefulWidget {
-  const QuizPlayScreen({super.key, required this.quizId});
+  const QuizPlayScreen({super.key, required this.quizId, this.mode});
 
   final String quizId;
+
+  /// Query `mode`: null/'practice', 'exam' or 'mistakes'.
+  final String? mode;
 
   @override
   ConsumerState<QuizPlayScreen> createState() => _QuizPlayScreenState();

@@ -1212,3 +1212,22 @@ border) plus the offline/error `SyncStatusBanner`; >= 720 a sidebar-style
 bottom), extended with the app name and labels from 1000px. Feature screens
 should not add their own outer navigation; use a flat `AppBar` (no tint) and
 `ResponsiveScaffold`/`ContentContainer` for width.
+
+## Wave 2 UI entry points (routes + placeholders)
+
+Routes (in `AppRoutes`): `home` `/home` (shell, `DashboardScreen`), `study`
+`/study` (shell, `StudyQueueScreen` — due cards across decks), `mistakes`
+`/mistakes` (`MistakesScreen`), `deck(id)` `/decks/:id` (`DeckDetailScreen`),
+`deckEdit(id)` (`DeckEditScreen`), `deckStudy(id)` (`DeckStudyScreen`),
+`quizPlay(id, mode: null|'exam'|'mistakes')` (`QuizPlayScreen(quizId, mode)`),
+`generate(kind: AiGenerateKind.deck, ...)`.
+
+| Entry point | File | Owner |
+|---|---|---|
+| `DeckListSection(subjectId:, noteId?, readOnly)` | `lib/features/decks/widgets/deck_list_section.dart` | decks |
+| Deck screens | `lib/features/decks/presentation/` | decks |
+| `StudyQueueScreen`, `MistakesScreen` | `lib/features/study/presentation/` | study |
+| `DashboardScreen` | `lib/features/dashboard/presentation/` | dashboard |
+
+Owners replace placeholder bodies keeping class names/constructors, so
+`app_router.dart` needs no further edits.

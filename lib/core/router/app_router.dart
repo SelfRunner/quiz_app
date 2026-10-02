@@ -8,6 +8,10 @@ import '../../data/data_providers.dart';
 import '../../features/ai_generate/presentation/ai_generate_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/signup_screen.dart';
+import '../../features/dashboard/presentation/dashboard_screen.dart';
+import '../../features/decks/presentation/deck_detail_screen.dart';
+import '../../features/decks/presentation/deck_edit_screen.dart';
+import '../../features/decks/presentation/deck_study_screen.dart';
 import '../../features/notes/presentation/note_edit_screen.dart';
 import '../../features/notes/presentation/note_view_screen.dart';
 import '../../features/quizzes/presentation/quiz_detail_screen.dart';
@@ -15,6 +19,8 @@ import '../../features/quizzes/presentation/quiz_edit_screen.dart';
 import '../../features/quizzes/presentation/quiz_play_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sharing/presentation/shared_with_me_screen.dart';
+import '../../features/study/presentation/mistakes_screen.dart';
+import '../../features/study/presentation/study_queue_screen.dart';
 import '../../features/subjects/presentation/subject_detail_screen.dart';
 import '../../features/subjects/presentation/subjects_screen.dart';
 import 'app_shell.dart';
@@ -51,8 +57,16 @@ final routerProvider = Provider<GoRouter>((ref) {
             AppShell(location: state.matchedLocation, child: child),
         routes: [
           GoRoute(
+            path: AppRoutes.home,
+            builder: (context, state) => const DashboardScreen(),
+          ),
+          GoRoute(
             path: AppRoutes.subjects,
             builder: (context, state) => const SubjectsScreen(),
+          ),
+          GoRoute(
+            path: AppRoutes.study,
+            builder: (context, state) => const StudyQueueScreen(),
           ),
           GoRoute(
             path: AppRoutes.shared,
@@ -93,19 +107,43 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: 'play',
-            builder: (context, state) =>
-                QuizPlayScreen(quizId: state.pathParameters['id']!),
+            builder: (context, state) => QuizPlayScreen(
+              quizId: state.pathParameters['id']!,
+              mode: state.uri.queryParameters['mode'],
+            ),
           ),
         ],
+      ),
+      GoRoute(
+        path: '/decks/:id',
+        builder: (context, state) =>
+            DeckDetailScreen(deckId: state.pathParameters['id']!),
+        routes: [
+          GoRoute(
+            path: 'edit',
+            builder: (context, state) =>
+                DeckEditScreen(deckId: state.pathParameters['id']!),
+          ),
+          GoRoute(
+            path: 'study',
+            builder: (context, state) =>
+                DeckStudyScreen(deckId: state.pathParameters['id']!),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: AppRoutes.mistakes,
+        builder: (context, state) => const MistakesScreen(),
       ),
       GoRoute(
         path: AppRoutes.aiGenerate,
         builder: (context, state) {
           final q = state.uri.queryParameters;
           return AiGenerateScreen(
-            kind: q['kind'] == AiGenerateKind.note.name
-                ? AiGenerateKind.note
-                : AiGenerateKind.quiz,
+            kind: AiGenerateKind.values.firstWhere(
+              (k) => k.name == q['kind'],
+              orElse: () => AiGenerateKind.quiz,
+            ),
             subjectId: q['subjectId'],
             noteId: q['noteId'],
           );

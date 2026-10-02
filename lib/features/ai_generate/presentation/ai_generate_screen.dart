@@ -24,7 +24,7 @@ import '../widgets/note_draft_editor.dart';
 import '../widgets/note_picker.dart';
 
 /// What to generate.
-enum AiGenerateKind { quiz, note }
+enum AiGenerateKind { quiz, note, deck }
 
 enum _Stage { form, generating, preview }
 

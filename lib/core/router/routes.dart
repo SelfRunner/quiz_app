@@ -6,6 +6,9 @@ abstract final class AppRoutes {
   static const String login = '/login';
   static const String signup = '/signup';
   static const String subjects = '/';
+  static const String home = '/home';
+  static const String study = '/study';
+  static const String mistakes = '/mistakes';
   static const String shared = '/shared';
   static const String settings = '/settings';
   static const String aiGenerate = '/ai/generate';
@@ -18,9 +21,15 @@ abstract final class AppRoutes {
   static String noteEdit(String id) => '/notes/$id/edit';
   static String quiz(String id) => '/quizzes/$id';
   static String quizEdit(String id) => '/quizzes/$id/edit';
-  static String quizPlay(String id) => '/quizzes/$id/play';
+  /// `mode`: null/practice, `exam` (time limit + pool, feedback at end) or
+  /// `mistakes` (only open mistakes of this quiz).
+  static String quizPlay(String id, {String? mode}) =>
+      mode == null ? '/quizzes/$id/play' : '/quizzes/$id/play?mode=$mode';
+  static String deck(String id) => '/decks/$id';
+  static String deckEdit(String id) => '/decks/$id/edit';
+  static String deckStudy(String id) => '/decks/$id/study';
 
-  /// `/ai/generate?kind=quiz|note&subjectId=..&noteId=..`
+  /// `/ai/generate?kind=quiz|note|deck&subjectId=..&noteId=..`
   static String generate({
     required AiGenerateKind kind,
     String? subjectId,
