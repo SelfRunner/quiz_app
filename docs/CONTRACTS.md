@@ -1214,6 +1214,105 @@ Web CORS: Gemini, OpenAI, Anthropic (via
 calls; self-hosted endpoints (Ollama etc.) need CORS configured; YouTube
 captions are blocked in browsers.
 
+### Wave 3 AI APIs (chat, note tools, quiz helpers)
+
+Separate interfaces (existing `AiService` and its fakes are unchanged):
+`aiChatServiceProvider` (`AiChatService`, `lib/ai/ai_chat_service.dart`) and
+`aiToolsServiceProvider` (`AiToolsService`, `lib/ai/ai_tools_service.dart`).
+Both use `llmResolverProvider` (`LlmResolver`: the same provider/key/model
+selection, keyless local endpoints and base-URL policy as `AiService`), take
+optional `providerId:` / `model:` overrides, and never write to the DB.
+UI tests override the two providers with fakes.
+
+**Source ids.** Every `AiSource` now has optional `id` and a `type`
+(`AiSourceType.text|note|file|youtube`): `NoteSource(id: note.id, ...)`,
+`FileSource(id: attachment.id, ...)`, `YoutubeSource(url, id:, title:)`,
+`TextSource(text:, label:, id:, type: AiSourceType.file)` for an
+attachment's `extracted_text`. Citations return `type` + `id` + title.
+
+**Chat.**
+
+```dart
+final chat = ref.read(aiChatServiceProvider);
+final sub = chat.send(
+  history: [ChatTurn.user('What is ATP?'), ChatTurn.assistant('...[S1]')], // oldest first, without the new message
+  userMessage: 'Where is it made?',
+  context: [NoteSource(id: n.id, title: n.title, markdown: n.contentMd), FileSource(id: a.id, ...)],
+).listen((d) => switch (d) {
+  ChatStarted(:final selection, :final sources) => ..., // S-numbering + notices
+  ChatTextDelta(:final text) => buffer.write(text),     // append, re-render
+  ChatCompleted(:final result) => save(result.text, result.citations),
+});
+await sub.cancel(); // "Stop": aborts the HTTP request, nothing more is emitted
+```
+
+* Events: one `ChatStarted`, `ChatTextDelta`s, one `ChatCompleted(result)`;
+  errors are stream errors (same typed errors as generation; empty message
+  -> `ValidationException`; refusal / safety block / empty answer ->
+  `AiException(provider)`; connection lost mid-answer -> `NetworkException`).
+* `ChatResult`: `text` (Markdown with `[S#]` markers), `citations`
+  (`ChatCitation{number, type, id, title}`, first-appearance order, only
+  sources the model could read; `toJson()` = `{n, type, id, title}` for
+  storing with the message), `sources`, `selection`, `truncated` (output
+  limit hit: show "answer cut off"), `streamed`, `droppedHistoryTurns`.
+* Markers: the model sees `[S1] note "Title"`, `[S2] file "x.pdf"` and cites
+  `[S1]`, `[S1][S2]`, `[S1, S3]`, `[S2-S4]`.
+  `ChatCitations.parse(text, sources)` works on partial text (live chips),
+  `ChatCitations.strip(text)` for copy/plain text.
+* Context order = priority and numbering; keep it stable within a chat.
+  Budget (`ChatBudget`): 60k chars of source text, each text source gets at
+  least 2k (or all of it), the rest goes to earlier sources first. Longer
+  sources become `excerpt` (beginning 80% + end 20%, middle replaced by a
+  note listing its Markdown headings); sources that don't fit are `omitted`.
+  History: newest turns up to 24k chars; older ones dropped (count in the
+  result). `ChatSourceRef.status`: `full | excerpt | omitted | unreadable`
+  with a user-facing `note` (file kind the model can't read, too large,
+  empty, transcript unavailable...) - chat never fails because of one
+  unreadable source; show the note as a hint.
+* Files the model can read are sent as attachments exactly like generation
+  (PDF/image/audio/video, Gemini Files API for large files, same limits),
+  labelled `[S#] file "name"`; text files are extracted; YouTube is native on
+  Gemini, transcript elsewhere.
+* Streaming wire formats (`LlmChatProvider`, implemented by all four
+  providers): Gemini `:streamGenerateContent?alt=sse`; OpenAI Responses
+  `stream: true` (`response.output_text.delta`, `response.completed` /
+  `incomplete` / `failed`, `error`); Anthropic Messages `stream: true`
+  (`content_block_delta` `text_delta`, `message_delta.stop_reason`,
+  `message_stop`, `error`); OpenAI-compatible `/chat/completions`
+  `stream: true` (`choices[0].delta.content`, `data: [DONE]`, OpenRouter
+  comments / mid-stream `error`). SSE parsing tolerates chunks split
+  anywhere (UTF-8, CRLF). If an endpoint rejects streaming (400/422
+  mentioning "stream"), the provider falls back to the non-streaming
+  request (whole answer in one delta, `streamed: false`) and remembers that
+  for the endpoint + model for the app session; a JSON reply to a streaming
+  request is accepted too. Idle timeout 3 min between chunks.
+
+**Note tools.** `tools.transformNote(markdown, tool, title:, language:,
+extraInstructions:)` -> `NoteToolResult{title?, markdown, selection,
+inputTruncated}` (structured output `{title?, markdown}`). Tools:
+`NoteTool.summarize`, `.simplify`, `.expand`, `NoteTool.translate('Spanish')`,
+`.studyGuide`, `.fixFormatting`. Input limit 60k chars: simplify / expand /
+translate / fixFormatting throw `ValidationException` above it; summarize /
+studyGuide use an excerpt (`inputTruncated: true`). Preview, then save as a
+new note or replace (UI's choice).
+
+**Quiz helpers.**
+* `tools.explainAnswer(question, attemptAnswer /* QuestionAnswer? */,
+  sources: [NoteSource(...)])` -> `AiExplanation{markdown, citations,
+  sources, selection}` (80-200 words; `[S#]` citations when sources given;
+  sources budget 30k chars).
+* `tools.gradeShortAnswer(question.prompt, question.answerText!, typed)` ->
+  `ShortAnswerGrade{verdict: correct|partial|incorrect, score 0..1,
+  feedback, selection}`; `isCorrect` = verdict correct (partial counts as
+  wrong). Score is clamped to the verdict band (correct 0.8-1, partial
+  0.2-0.8, incorrect 0-0.2). A blank answer is graded locally (incorrect,
+  0, no request). Self-grading stays the default; AI grading is opt-in.
+* Structured output uses each provider's schema mode (OpenAI strict
+  `json_schema`, Gemini `responseFormat`, Anthropic `output_config` with
+  constraints moved to descriptions, OpenAI-compatible json_schema ->
+  json_object -> prompt), validated locally with one repair retry
+  (`AiException(invalidOutput)` if both fail).
+
 ## Cross-feature UI entry points (Phase 2)
 
 Stubs exist so the three UI agents can depend on each other without touching

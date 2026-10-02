@@ -1,18 +1,15 @@
-import 'dart:convert';
-
 import '../core/errors/app_exception.dart';
 import '../data/models/drafts.dart';
 import '../data/models/question.dart';
 import 'ai_capabilities.dart';
-import 'ai_readiness.dart';
 import 'ai_service.dart';
 import 'api_key_store.dart';
-import 'base_url_policy.dart';
 import 'draft_validator.dart';
 import 'llm_provider.dart';
+import 'llm_resolver.dart';
 import 'prompts.dart';
-import 'providers/http_support.dart';
 import 'providers/openai_compatible_provider.dart';
+import 'structured_generation.dart';
 import 'text_extractor.dart';
 import 'transcript_service.dart';
 import 'youtube_url.dart';
@@ -30,11 +27,18 @@ class DefaultAiService implements AiService {
     this.maxQuestionCount = 50,
   }) : _keys = keyStore,
        _factory = providerFactory,
-       _transcripts = transcriptService;
+       _transcripts = transcriptService,
+       _resolver = LlmResolver(
+         keyStore: keyStore,
+         providerFactory: providerFactory,
+         capabilities: capabilities,
+         isWeb: isWeb,
+       );
 
   final ApiKeyStore _keys;
   final LlmProviderFactory _factory;
   final TranscriptService _transcripts;
+  final LlmResolver _resolver;
 
   /// Resolves model capabilities (OpenRouter metadata); null = static table.
   final AiCapabilityResolver? capabilities;
@@ -72,7 +76,7 @@ class DefaultAiService implements AiService {
       request.copyWith(questionTypes: types),
       prepared.source,
     );
-    return _generateValidated(
+    return generateValidatedJson(
       provider: prepared.provider,
       system: Prompts.quizSystem(),
       user: userPrompt,
@@ -101,7 +105,7 @@ class DefaultAiService implements AiService {
       providerId: request.providerId,
       model: request.model,
     );
-    return _generateValidated(
+    return generateValidatedJson(
       provider: prepared.provider,
       system: Prompts.noteSystem(),
       user: Prompts.noteUser(request, prepared.source),
@@ -126,7 +130,7 @@ class DefaultAiService implements AiService {
       providerId: request.providerId,
       model: request.model,
     );
-    return _generateValidated(
+    return generateValidatedJson(
       provider: prepared.provider,
       system: request.systemPrompt,
       user: Prompts.structuredUser(
@@ -150,30 +154,7 @@ class DefaultAiService implements AiService {
   Future<AiSelection> resolveSelection({
     LlmProviderId? providerId,
     String? model,
-  }) async {
-    var provider = providerId ?? await _keys.getSelectedProvider();
-    if (provider == null) {
-      final configured = await _keys.configuredProviders();
-      for (final p in LlmProviderId.values) {
-        if (configured.contains(p) ||
-            isKeylessEndpoint(p, await _keys.getBaseUrl(p))) {
-          provider = p;
-          break;
-        }
-      }
-    }
-    if (provider == null) {
-      throw const AiException(
-        'Add an AI provider API key in Settings to generate content.',
-        kind: AiErrorKind.missingApiKey,
-      );
-    }
-    final override = model?.trim();
-    final resolvedModel = (override != null && override.isNotEmpty)
-        ? override
-        : (await _keys.getSelectedModel(provider)) ?? provider.defaultModel;
-    return AiSelection(providerId: provider, model: resolvedModel);
-  }
+  }) => _resolver.resolveSelection(providerId: providerId, model: model);
 
   @override
   Future<List<String>> listModels(
@@ -230,7 +211,7 @@ class DefaultAiService implements AiService {
         apiKey: key ?? '',
         model:
             (await _keys.getSelectedModel(provider)) ?? provider.defaultModel,
-        baseUrl: _checkedBaseUrl(
+        baseUrl: LlmResolver.checkedBaseUrl(
           _blankToNull(baseUrl) ??
               await _keys.getBaseUrl(provider) ??
               provider.defaultBaseUrl,
@@ -295,38 +276,21 @@ class DefaultAiService implements AiService {
       }
     }
 
-    final selection = await resolveSelection(
+    final resolved = await _resolver.resolve(
       providerId: providerId,
       model: model,
     );
+    final selection = resolved.selection;
     final id = selection.providerId;
-    final key = await _keys.getApiKey(id);
-    final storedBase = await _keys.getBaseUrl(id);
-    if (key == null && !isKeylessEndpoint(id, storedBase)) {
-      throw AiException(
-        'No API key saved for ${id.displayName}. Add one in Settings.',
-        kind: AiErrorKind.missingApiKey,
-      );
-    }
-    final baseUrl = _checkedBaseUrl(storedBase ?? id.defaultBaseUrl);
-    final provider = _factory.create(
-      LlmConfig(
-        providerId: id,
-        apiKey: key ?? '',
-        model: selection.model,
-        baseUrl: baseUrl,
-        extraHeaders: id == LlmProviderId.openaiCompatible
-            ? await _keys.getExtraHeaders(id)
-            : const {},
-      ),
-    );
+    final provider = resolved.provider;
+    final baseUrl = resolved.baseUrl;
 
     final needsCaps = sources.any(
       (s) =>
           s is YoutubeSource || (s is FileSource && s.kind != AiInputKind.text),
     );
     final caps = needsCaps
-        ? await _capabilitiesFor(selection, baseUrl)
+        ? await _resolver.capabilitiesFor(selection, baseUrl)
         : AiCapabilities.textOnly;
 
     final entries = <PromptSourceEntry>[];
@@ -437,31 +401,6 @@ class DefaultAiService implements AiService {
     );
   }
 
-  Future<AiCapabilities> _capabilitiesFor(
-    AiSelection selection,
-    String? baseUrl,
-  ) async {
-    final manual = await _keys.getInputOverride(
-      selection.providerId,
-      selection.model,
-    );
-    final resolver = capabilities;
-    if (resolver != null) {
-      return resolver.resolve(
-        provider: selection.providerId,
-        model: selection.model,
-        baseUrl: baseUrl,
-        manualOverride: manual,
-      );
-    }
-    return staticCapabilities(
-      selection.providerId,
-      selection.model,
-      manual: manual,
-      isWeb: isWeb,
-    );
-  }
-
   static String _unsupportedMessage(
     AiSelection selection,
     AiInputKind kind,
@@ -523,83 +462,6 @@ class DefaultAiService implements AiService {
     return '${text.substring(0, max)}\n\n[Source truncated: showing the '
         'first $max of ${text.length} characters.]';
   }
-
-  /// Calls the provider, validates, and on invalid JSON / validation errors
-  /// sends ONE repair request containing the previous output and the
-  /// problems. The second attempt is accepted if it yields any valid draft
-  /// (invalid questions are dropped).
-  Future<T> _generateValidated<T>({
-    required LlmProvider provider,
-    required String system,
-    required String user,
-    required Map<String, Object?> schema,
-    required String schemaName,
-    required List<LlmAttachment> attachments,
-    required String what,
-    required DraftValidation<T> Function(Map<String, dynamic> json) validate,
-  }) async {
-    Future<Map<String, dynamic>> call(String prompt) => provider.generateJson(
-      prompt: prompt,
-      schema: schema,
-      schemaName: schemaName,
-      systemPrompt: system,
-      attachments: attachments,
-    );
-
-    String previous;
-    List<String> problems;
-    try {
-      final json = await call(user);
-      final result = validate(json);
-      if (result.isValid) return result.value as T;
-      previous = jsonEncode(json);
-      problems = result.errors;
-    } on AiException catch (e) {
-      final raw = e.cause;
-      if (e.kind != AiErrorKind.invalidOutput ||
-          (raw is RawModelOutput && raw.truncated)) {
-        rethrow;
-      }
-      previous = raw is RawModelOutput ? raw.text : '';
-      problems = const [
-        'The answer was not a single valid JSON object matching the schema.',
-      ];
-    }
-
-    final repairPrompt = Prompts.repair(
-      originalPrompt: user,
-      previousOutput: previous,
-      problems: problems,
-    );
-    try {
-      final json = await call(repairPrompt);
-      final result = validate(json);
-      final value = result.value;
-      if (value != null) return value;
-      throw AiException(
-        'The AI returned an unusable $what twice. Try again, add more source '
-        'material, or pick a different model.',
-        kind: AiErrorKind.invalidOutput,
-        cause: result.errors.join('\n'),
-      );
-    } on AiException catch (e) {
-      if (e.kind != AiErrorKind.invalidOutput) rethrow;
-      final raw = e.cause;
-      if (raw is RawModelOutput && raw.truncated) rethrow;
-      if (e.cause is String) rethrow; // our own message above
-      throw AiException(
-        'The AI returned an unusable $what twice. Try again or pick a '
-        'different model.',
-        kind: AiErrorKind.invalidOutput,
-        cause: e,
-      );
-    }
-  }
-
-  /// Never send a key to a non-https remote URL (unsaved Settings input or
-  /// a value stored before the https rule existed).
-  static String? _checkedBaseUrl(String? url) =>
-      url == null ? null : normalizeBaseUrl(url);
 
   static String? _blankToNull(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v.trim();

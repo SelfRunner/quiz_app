@@ -2,10 +2,12 @@ import 'dart:convert';
 
 import '../../core/errors/app_exception.dart';
 import '../ai_source.dart';
+import '../llm_chat.dart';
 import '../llm_provider.dart';
 import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
+import 'sse.dart';
 
 /// Anthropic Claude via the Messages API.
 ///
@@ -20,7 +22,7 @@ import 'schema_adapters.dart';
 ///   label, then `document` (base64 PDF, with `title`) or `image` (base64),
 ///   per file, then the prompt. No audio/video (`ProviderLimits.anthropic`).
 /// * `GET {base}/v1/models` (paged with `after_id`).
-class AnthropicProvider extends HttpLlmProvider {
+class AnthropicProvider extends HttpLlmProvider implements LlmChatProvider {
   AnthropicProvider(
     super.config,
     super.client, {
@@ -163,6 +165,129 @@ class AnthropicProvider extends HttpLlmProvider {
     {'type': 'text', 'text': prompt},
   ];
 
+  // ---------------------------------------------------------------- chat
+
+  @override
+  Stream<LlmChatEvent> streamChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) => streamSse(
+    uri: joinUrl(_base, '/v1/messages'),
+    headers: _headers,
+    body: () async => _chatBody(
+      messages,
+      systemPrompt,
+      attachments,
+      maxOutputTokens,
+      stream: true,
+    ),
+    parser: _AnthropicStreamParser.new,
+    parseJson: _chatCompletion,
+    fallback: () => completeChat(
+      messages: messages,
+      systemPrompt: systemPrompt,
+      attachments: attachments,
+      maxOutputTokens: maxOutputTokens,
+    ),
+    streamRejection: RegExp('stream', caseSensitive: false),
+  );
+
+  @override
+  Future<LlmChatCompletion> completeChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) async {
+    final response = await postJson(
+      joinUrl(_base, '/v1/messages'),
+      headers: _headers,
+      body: _chatBody(
+        messages,
+        systemPrompt,
+        attachments,
+        maxOutputTokens,
+        stream: false,
+      ),
+    );
+    return _chatCompletion(response);
+  }
+
+  Map<String, Object?> _chatBody(
+    List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments,
+    int? maxOutputTokens, {
+    required bool stream,
+  }) {
+    final turns = normalizeChatMessages(messages);
+    if (turns.isEmpty) {
+      throw const ValidationException('Type a message first.');
+    }
+    rejectYoutube(attachments, null, 'Claude');
+    ProviderLimits.anthropic.check(attachments, displayName);
+    return {
+      'model': config.model,
+      'max_tokens': maxOutputTokens ?? maxTokens,
+      if (systemPrompt != null && systemPrompt.isNotEmpty)
+        'system': systemPrompt,
+      'messages': [
+        for (var i = 0; i < turns.length; i++)
+          {
+            'role': turns[i].role.name,
+            'content': i == turns.length - 1 && attachments.isNotEmpty
+                ? _content(turns[i].text, attachments)
+                : turns[i].text,
+          },
+      ],
+      if (stream) 'stream': true,
+    };
+  }
+
+  static LlmFinishReason _stopReason(Object? reason) => switch (reason) {
+    'end_turn' || 'stop_sequence' || null => LlmFinishReason.stop,
+    'max_tokens' || 'model_context_window_exceeded' => LlmFinishReason.length,
+    'refusal' => LlmFinishReason.refusal,
+    _ => LlmFinishReason.other,
+  };
+
+  static LlmChatCompletion _chatCompletion(Map<String, dynamic> response) {
+    if (response['type'] == 'error') throw _streamError(response);
+    final text = StringBuffer();
+    for (final block in (response['content'] as List? ?? const [])) {
+      if (block is Map && block['type'] == 'text' && block['text'] is String) {
+        text.write(block['text']);
+      }
+    }
+    final stop = response['stop_reason'];
+    return LlmChatCompletion(
+      text.toString(),
+      _stopReason(stop),
+      detail: stop?.toString(),
+    );
+  }
+
+  /// `{type: error, error: {type, message}}` (stream `error` event).
+  static AiException _streamError(Map<String, dynamic> json) {
+    final error = json['error'];
+    final type = error is Map ? error['type'] : null;
+    final message = error is Map ? error['message']?.toString() : null;
+    return switch (type) {
+      'overloaded_error' => const AiException(
+        'Claude is temporarily overloaded. Try again shortly.',
+        statusCode: 529,
+      ),
+      'rate_limit_error' => const AiException(
+        'Anthropic rate limit reached. Wait a moment and try again.',
+        kind: AiErrorKind.rateLimited,
+        statusCode: 429,
+      ),
+      _ => AiException('Claude error: ${message ?? type ?? 'unknown'}'),
+    };
+  }
+
   static String _toolName(String? schemaName) {
     final cleaned = (schemaName ?? 'output').replaceAll(
       RegExp(r'[^a-zA-Z0-9_-]'),
@@ -199,4 +324,43 @@ class AnthropicProvider extends HttpLlmProvider {
     }
     return decodeJsonObject(text.toString(), providerName: displayName);
   }
+}
+
+/// Messages API streaming: `content_block_delta` (`text_delta`) carries
+/// text, `message_delta` the stop reason, `message_stop` ends the stream,
+/// `error` fails it; `ping` / `message_start` / block start-stop are ignored.
+class _AnthropicStreamParser implements SseChatParser {
+  Object? _stopReason;
+
+  @override
+  Iterable<LlmChatEvent> onEvent(SseEvent event) {
+    final json = sseJson(event);
+    if (json == null) return const [];
+    switch (json['type'] ?? event.event) {
+      case 'content_block_delta':
+        final delta = json['delta'];
+        if (delta is Map && delta['type'] == 'text_delta') {
+          final text = delta['text'];
+          if (text is String && text.isNotEmpty) return [LlmTextDelta(text)];
+        }
+      case 'message_delta':
+        final delta = json['delta'];
+        if (delta is Map && delta['stop_reason'] != null) {
+          _stopReason = delta['stop_reason'];
+        }
+      case 'message_stop':
+        return [
+          LlmChatDone(
+            AnthropicProvider._stopReason(_stopReason),
+            detail: _stopReason?.toString(),
+          ),
+        ];
+      case 'error':
+        throw AnthropicProvider._streamError(json);
+    }
+    return const [];
+  }
+
+  @override
+  LlmChatDone onEnd() => throw streamInterrupted('Anthropic');
 }

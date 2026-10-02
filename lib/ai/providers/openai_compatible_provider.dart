@@ -2,10 +2,12 @@ import 'dart:convert';
 
 import '../../core/errors/app_exception.dart';
 import '../ai_source.dart';
+import '../llm_chat.dart';
 import '../llm_provider.dart';
 import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
+import 'sse.dart';
 
 /// How structured output is requested from an OpenAI-compatible endpoint.
 enum CompatJsonMode {
@@ -35,7 +37,8 @@ enum CompatJsonMode {
 ///   prompt. Whether the model accepts them is decided by `AiCapabilities`.
 /// * `GET {baseUrl}/models`. For OpenRouter `testConnection` additionally
 ///   calls `GET {baseUrl}/key`, since `/models` does not need a key there.
-class OpenAiCompatibleProvider extends HttpLlmProvider {
+class OpenAiCompatibleProvider extends HttpLlmProvider
+    implements LlmChatProvider {
   OpenAiCompatibleProvider(
     super.config,
     super.client, {
@@ -192,6 +195,148 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
     {'type': 'text', 'text': prompt},
   ];
 
+  // ---------------------------------------------------------------- chat
+
+  static final _streamRejection = RegExp(
+    r'stream|not supported|unsupported',
+    caseSensitive: false,
+  );
+
+  @override
+  Stream<LlmChatEvent> streamChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) => streamSse(
+    uri: joinUrl(_base, '/chat/completions'),
+    headers: _headers,
+    body: () async => _chatBody(
+      messages,
+      systemPrompt,
+      attachments,
+      maxOutputTokens,
+      stream: true,
+    ),
+    parser: () => _CompatStreamParser(this),
+    parseJson: _chatCompletion,
+    fallback: () => completeChat(
+      messages: messages,
+      systemPrompt: systemPrompt,
+      attachments: attachments,
+      maxOutputTokens: maxOutputTokens,
+    ),
+    streamRejection: _streamRejection,
+  );
+
+  @override
+  Future<LlmChatCompletion> completeChat({
+    required List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
+    int? maxOutputTokens,
+  }) async {
+    final response = await postJson(
+      joinUrl(_base, '/chat/completions'),
+      headers: _headers,
+      body: _chatBody(
+        messages,
+        systemPrompt,
+        attachments,
+        maxOutputTokens,
+        stream: false,
+      ),
+    );
+    return _chatCompletion(response);
+  }
+
+  Map<String, Object?> _chatBody(
+    List<LlmChatMessage> messages,
+    String? systemPrompt,
+    List<LlmAttachment> attachments,
+    int? maxOutputTokens, {
+    required bool stream,
+  }) {
+    final turns = normalizeChatMessages(messages);
+    if (turns.isEmpty) {
+      throw const ValidationException('Type a message first.');
+    }
+    rejectYoutube(attachments, null, displayName);
+    ProviderLimits.openaiCompatible.check(attachments, displayName);
+    return {
+      'model': config.model,
+      'messages': [
+        if (systemPrompt != null && systemPrompt.isNotEmpty)
+          {'role': 'system', 'content': systemPrompt},
+        for (var i = 0; i < turns.length; i++)
+          {
+            'role': turns[i].role.name,
+            'content': i == turns.length - 1 && attachments.isNotEmpty
+                ? _content(turns[i].text, attachments)
+                : turns[i].text,
+          },
+      ],
+      if (stream) 'stream': true,
+      'max_tokens': ?maxOutputTokens,
+    };
+  }
+
+  static LlmFinishReason? _finishReason(Object? reason) => switch (reason) {
+    null => null,
+    'stop' || 'eos' || 'end_turn' => LlmFinishReason.stop,
+    'length' || 'max_tokens' => LlmFinishReason.length,
+    'content_filter' => LlmFinishReason.blocked,
+    _ => LlmFinishReason.other,
+  };
+
+  /// Throws the mapped error when [json] carries an `error` object
+  /// (OpenRouter reports upstream errors with a 200 status, also
+  /// mid-stream).
+  void _throwIfError(Map<String, dynamic> json) {
+    final error = json['error'];
+    if (error is! Map) return;
+    final code = error['code'];
+    throw mapHttpError(
+      providerName: displayName,
+      statusCode: code is int ? code : 502,
+      body: json,
+      rawBody: '',
+      apiKey: config.apiKey,
+    );
+  }
+
+  static String _contentText(Object? content) => switch (content) {
+    final String s => s,
+    final List<Object?> parts =>
+      parts
+          .whereType<Map<Object?, Object?>>()
+          .map((p) => p['text'])
+          .whereType<String>()
+          .join(),
+    _ => '',
+  };
+
+  LlmChatCompletion _chatCompletion(Map<String, dynamic> response) {
+    _throwIfError(response);
+    final choices = response['choices'];
+    if (choices is! List || choices.isEmpty || choices.first is! Map) {
+      throw AiException('$displayName returned no answer. Try again.');
+    }
+    final choice = choices.first as Map;
+    final message = choice['message'] as Map? ?? const {};
+    final text = _contentText(message['content']);
+    final refusal = message['refusal'];
+    if (text.isEmpty && refusal is String && refusal.isNotEmpty) {
+      return LlmChatCompletion('', LlmFinishReason.refusal, detail: refusal);
+    }
+    final reason = choice['finish_reason'];
+    return LlmChatCompletion(
+      text,
+      _finishReason(reason) ?? LlmFinishReason.stop,
+      detail: reason?.toString(),
+    );
+  }
+
   Map<String, dynamic> _parse(Map<String, dynamic> response) {
     final choices = response['choices'];
     if (choices is! List || choices.isEmpty) {
@@ -235,5 +380,60 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
       );
     }
     return decodeJsonObject(text, providerName: displayName);
+  }
+}
+
+/// Chat Completions streaming: `data: {choices: [{delta: {content},
+/// finish_reason}]}` chunks, terminated by `data: [DONE]`. OpenRouter adds
+/// `: OPENROUTER PROCESSING` comments and may send `{error: {...}}`
+/// mid-stream.
+class _CompatStreamParser implements SseChatParser {
+  _CompatStreamParser(this._provider);
+
+  final OpenAiCompatibleProvider _provider;
+  LlmFinishReason? _finish;
+  String? _detail;
+  final _refusal = StringBuffer();
+  var _hasText = false;
+
+  LlmChatDone _done() {
+    if (!_hasText && _refusal.isNotEmpty) {
+      return LlmChatDone(LlmFinishReason.refusal, detail: _refusal.toString());
+    }
+    return LlmChatDone(_finish ?? LlmFinishReason.stop, detail: _detail);
+  }
+
+  @override
+  Iterable<LlmChatEvent> onEvent(SseEvent event) {
+    if (event.data.trim() == '[DONE]') return [_done()];
+    final json = sseJson(event);
+    if (json == null) return const [];
+    _provider._throwIfError(json);
+    final choices = json['choices'];
+    if (choices is! List || choices.isEmpty || choices.first is! Map) {
+      return const [];
+    }
+    final choice = choices.first as Map;
+    final reason = choice['finish_reason'];
+    if (reason != null) {
+      _finish = OpenAiCompatibleProvider._finishReason(reason);
+      _detail = reason.toString();
+    }
+    final delta = choice['delta'];
+    if (delta is! Map) return const [];
+    final refusal = delta['refusal'];
+    if (refusal is String) _refusal.write(refusal);
+    final text = OpenAiCompatibleProvider._contentText(delta['content']);
+    if (text.isEmpty) return const [];
+    _hasText = true;
+    return [LlmTextDelta(text)];
+  }
+
+  /// Some servers close without `[DONE]`; accept that once a finish reason
+  /// arrived.
+  @override
+  LlmChatDone onEnd() {
+    if (_finish == null) throw streamInterrupted(_provider.displayName);
+    return _done();
   }
 }
