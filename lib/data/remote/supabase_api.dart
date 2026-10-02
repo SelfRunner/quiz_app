@@ -2,7 +2,8 @@
 ///
 /// Parameter names are part of the contract; see docs/CONTRACTS.md.
 abstract final class SupabaseRpc {
-  /// `find_user_by_email(p_email text) returns table(id uuid, display_name text)`
+  /// `find_user_by_email(p_email text) returns table(id uuid, display_name text,
+  ///   email text)`
   /// Exact, case-insensitive match; returns 0 or 1 row.
   static const String findUserByEmail = 'find_user_by_email';
 

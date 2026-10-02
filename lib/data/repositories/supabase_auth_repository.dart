@@ -8,9 +8,13 @@ import 'auth_repository.dart';
 
 /// [AuthRepository] backed by Supabase Auth.
 class SupabaseAuthRepository implements AuthRepository {
-  SupabaseAuthRepository(this._client);
+  SupabaseAuthRepository(this._client, {this.beforeSignOut});
 
   final sb.SupabaseClient _client;
+
+  /// Best-effort hook run before signing out (the data layer pushes pending
+  /// changes, since local data is wiped on sign-out). Errors are ignored.
+  final Future<void> Function()? beforeSignOut;
 
   @override
   AppUser? get currentUser => _map(_client.auth.currentUser);
@@ -46,7 +50,17 @@ class SupabaseAuthRepository implements AuthRepository {
       );
 
   @override
-  Future<void> signOut() => _guard(_client.auth.signOut);
+  Future<void> signOut() async {
+    final hook = beforeSignOut;
+    if (hook != null) {
+      try {
+        await hook().timeout(const Duration(seconds: 10));
+      } catch (_) {
+        // Signing out must not be blocked by sync problems.
+      }
+    }
+    await _guard(_client.auth.signOut);
+  }
 
   @override
   Future<void> resetPassword(String email) =>

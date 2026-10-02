@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 
 /// Hive CE storage layout.
@@ -26,6 +28,22 @@ abstract final class HiveBoxes {
   /// API keys are NOT stored here (see `ApiKeyStore`).
   static const String prefs = 'prefs';
 
+  /// Image bytes keyed by storage path (`Box<Uint8List>`). Used as the image
+  /// cache on web (no filesystem) and in tests; native platforms cache images
+  /// as files under the app support directory instead.
+  static const String noteImageBytes = 'note_image_bytes';
+
+  /// Boxes holding user-scoped data, cleared on sign-out / account switch.
+  /// [prefs] is device-scoped and survives sign-out.
+  static const List<String> userScopedStringBoxes = [
+    subjects,
+    notes,
+    quizzes,
+    quizAttempts,
+    outbox,
+    syncMeta,
+  ];
+
   static const List<String> stringBoxes = [
     subjects,
     notes,
@@ -44,6 +62,7 @@ abstract final class HiveBoxes {
     for (final name in stringBoxes) {
       await Hive.openBox<String>(name);
     }
+    await Hive.openBox<Uint8List>(noteImageBytes);
   }
 
   /// Hook for TypeAdapter registration. Intentionally empty: all models are
@@ -57,5 +76,6 @@ abstract final class HiveBoxes {
     for (final name in stringBoxes) {
       await Hive.box<String>(name).clear();
     }
+    await Hive.box<Uint8List>(noteImageBytes).clear();
   }
 }
