@@ -9,8 +9,9 @@ import '../../../data/models/quiz.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
 import 'quiz_format.dart';
 
-/// Lists the quizzes of a subject (when [noteId] is null: subject-level
-/// quizzes) or of a note, with actions to open, create and AI-generate.
+/// Lists the quizzes of a subject (when [noteId] is null: every quiz of the
+/// subject, subject-level ones first, then note quizzes labeled with their
+/// note) or of a note (only that note's quizzes), with actions to open, create and AI-generate.
 ///
 /// Cross-feature entry point: subject and note screens embed this; the
 /// quizzes feature owns the implementation. Renders as a non-scrolling
@@ -73,6 +74,8 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
                 (l) => [
                   for (final q in l)
                     if (q.noteId == null) q,
+                  for (final q in l)
+                    if (q.noteId != null) q,
                 ],
               )
         : ref.watch(quizzesByNoteProvider(noteId));
@@ -140,7 +143,10 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
       ),
       AsyncValue(:final value?) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [for (final q in value) _QuizTile(quiz: q)],
+        children: [
+          for (final q in value)
+            _QuizTile(quiz: q, showNote: noteId == null && q.noteId != null),
+        ],
       ),
       AsyncValue(:final error?) => InfoBanner(
         kind: InfoBannerKind.error,
@@ -158,9 +164,12 @@ class _QuizListSectionState extends ConsumerState<QuizListSection> {
 }
 
 class _QuizTile extends ConsumerWidget {
-  const _QuizTile({required this.quiz});
+  const _QuizTile({required this.quiz, this.showNote = false});
 
   final Quiz quiz;
+
+  /// Label the quiz with its note (subject-wide listing).
+  final bool showNote;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -181,6 +190,11 @@ class _QuizTile extends ConsumerWidget {
       parts.add('Not played yet');
     }
     final aiMade = quiz.source?.provider != null;
+    final noteId = quiz.noteId;
+    final noteTitle = showNote && noteId != null
+        ? ref.watch(noteProvider(noteId)).value?.title
+        : null;
+    final colors = AppColors.of(context);
     return ListRowTile(
       key: ValueKey('quiz-row-${quiz.id}'),
       leading: Tooltip(
@@ -188,7 +202,32 @@ class _QuizTile extends ConsumerWidget {
         child: Icon(aiMade ? Icons.auto_awesome_outlined : Icons.quiz_outlined),
       ),
       title: Text(quiz.title),
-      subtitle: Text(parts.join(' · ')),
+      subtitle: showNote
+          ? Text.rich(
+              TextSpan(
+                children: [
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: Insets.xs),
+                      child: Icon(
+                        Icons.description_outlined,
+                        size: 14,
+                        color: colors.faintText,
+                      ),
+                    ),
+                  ),
+                  TextSpan(
+                    text:
+                        'From note: '
+                        '${noteTitle == null || noteTitle.trim().isEmpty ? 'Untitled note' : noteTitle}',
+                  ),
+                  TextSpan(text: ' · ${parts.join(' · ')}'),
+                ],
+              ),
+              key: ValueKey('quiz-note-label-${quiz.id}'),
+            )
+          : Text(parts.join(' · ')),
       onTap: () => context.push(AppRoutes.quiz(quiz.id)),
       actions: [
         if (count > 0)

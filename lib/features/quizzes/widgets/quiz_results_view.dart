@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
-import '../../../data/models/question.dart';
 import '../domain/quiz_session.dart';
+import 'answer_review_card.dart';
 import 'quiz_format.dart';
 
 enum SaveStatus { idle, saving, saved, failed, practice }
@@ -87,7 +87,11 @@ class QuizResultsView extends StatelessWidget {
               color: colors.mutedText,
             ),
           ),
-          _SaveLine(status: saveStatus, error: saveError, onRetry: onRetrySave),
+          SaveStatusLine(
+            status: saveStatus,
+            error: saveError,
+            onRetry: onRetrySave,
+          ),
           Gaps.h24,
           Wrap(
             spacing: Insets.sm,
@@ -129,7 +133,13 @@ class QuizResultsView extends StatelessWidget {
           ContentContainer(
             child: Padding(
               padding: const EdgeInsets.only(bottom: Insets.sm),
-              child: _ReviewCard(index: i, item: s.items[i], session: s),
+              child: AnswerReviewCard(
+                index: i,
+                question: s.items[i].question,
+                selected: s.selectedFor(s.items[i].id).toList(),
+                text: s.textFor(s.items[i].id),
+                grade: s.gradeFor(s.items[i].id),
+              ),
             ),
           ),
       ],
@@ -137,8 +147,14 @@ class QuizResultsView extends StatelessWidget {
   }
 }
 
-class _SaveLine extends StatelessWidget {
-  const _SaveLine({required this.status, required this.onRetry, this.error});
+/// "Saved to your history" / saving / failed (with retry) line.
+class SaveStatusLine extends StatelessWidget {
+  const SaveStatusLine({
+    super.key,
+    required this.status,
+    required this.onRetry,
+    this.error,
+  });
 
   final SaveStatus status;
   final String? error;
@@ -186,122 +202,5 @@ class _SaveLine extends StatelessWidget {
         ),
       ),
     };
-  }
-}
-
-class _ReviewCard extends StatelessWidget {
-  const _ReviewCard({
-    required this.index,
-    required this.item,
-    required this.session,
-  });
-
-  final int index;
-  final PlayItem item;
-  final QuizSession session;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = AppColors.of(context);
-    final q = item.question;
-    final grade = session.gradeFor(item.id);
-    final ok = grade == true;
-    final label = TextStyle(color: colors.mutedText);
-
-    String yours;
-    String correct;
-    if (q.type.hasOptions) {
-      final selected = session.selectedFor(item.id).toList()..sort();
-      yours = selected.isEmpty
-          ? 'No answer'
-          : selected.map((i) => q.options[i]).join(', ');
-      correct = q.correctIndices.map((i) => q.options[i]).join(', ');
-    } else {
-      final text = session.textFor(item.id).trim();
-      yours = text.isEmpty ? '(not written)' : text;
-      correct = q.answerText ?? '—';
-    }
-
-    return AppCard(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 1),
-            child: Icon(
-              ok ? Icons.check_circle_outline : Icons.highlight_off,
-              size: 20,
-              color: ok ? colors.success : colors.danger,
-              semanticLabel: ok ? 'Correct' : 'Incorrect',
-            ),
-          ),
-          Gaps.w12,
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${index + 1}. ${q.prompt}',
-                  style: theme.textTheme.titleSmall,
-                ),
-                Gaps.h8,
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(text: 'Your answer: ', style: label),
-                      TextSpan(
-                        text: yours,
-                        style: ok
-                            ? null
-                            : TextStyle(
-                                color: colors.danger,
-                                decoration: q.type.hasOptions
-                                    ? TextDecoration.lineThrough
-                                    : null,
-                                decorationColor: colors.danger,
-                              ),
-                      ),
-                    ],
-                  ),
-                  style: theme.textTheme.bodyMedium,
-                ),
-                if (!ok || q.type == QuestionType.shortAnswer)
-                  Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: q.type == QuestionType.shortAnswer
-                              ? 'Model answer: '
-                              : 'Correct answer: ',
-                          style: label,
-                        ),
-                        TextSpan(
-                          text: correct,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: colors.success,
-                          ),
-                        ),
-                      ],
-                    ),
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                if (q.explanation != null &&
-                    q.explanation!.trim().isNotEmpty) ...[
-                  Gaps.h8,
-                  Text(
-                    q.explanation!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colors.mutedText,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
