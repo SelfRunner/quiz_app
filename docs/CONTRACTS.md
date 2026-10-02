@@ -513,7 +513,9 @@ each other's folders. Owners replace the bodies, keeping signatures.
 | Entry point | File | Owner | Used by |
 |---|---|---|---|
 | `showShareSheet(context, type:, resourceId:, title:)` | `lib/features/sharing/widgets/share_actions.dart` | sharing | subject/note/quiz screens (owner only) |
-| `CopyToAccountButton(type:, resourceId:)` | same file | sharing | subject/note/quiz screens when not owned |
+| `CopyToAccountButton(type:, resourceId:, compact = false)` | same file | sharing | subject/note/quiz screens when not owned (`compact: true` = app-bar icon button). Notes/quizzes ask for an owned target subject (or create one); snackbar "Open" pushes the copy's route |
+| `copySharedToMyAccount(context, type:, resourceId:)` → `Future<String?>` | same file | sharing | popup-menu items (same flow as the button; returns the new id) |
+| `SharedByChip(ownerId:, ownerName?)` | `lib/features/sharing/widgets/shared_by_chip.dart` | sharing | subject/note/quiz screens when not owned ("Shared by Alice"; resolves the name via `sharedOwnerNamesProvider`, best effort, falls back to "Shared with you"; tests should override `shareRepositoryProvider` or pass `ownerName`) |
 | `QuizListSection(subjectId:, noteId?, readOnly)` | `lib/features/quizzes/widgets/quiz_list_section.dart` | quizzes | `SubjectDetailScreen` (noteId null = subject-level quizzes), `NoteViewScreen` |
 
 AI note generation result is saved by the ai_generate feature (creates the note
