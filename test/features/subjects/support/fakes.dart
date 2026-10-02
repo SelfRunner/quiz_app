@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:quiz_app/ai/ai_capabilities.dart';
 import 'package:quiz_app/ai/ai_providers.dart';
 import 'package:quiz_app/ai/ai_service.dart';
 import 'package:quiz_app/ai/api_key_store.dart';
@@ -304,7 +303,7 @@ class FakeImageStore implements ImageStore {
   Future<void> delete(NoteImageRef ref) async => saved.remove(ref.storagePath);
 }
 
-class FakeApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
+class FakeApiKeyStore implements ApiKeyStore {
   final Map<LlmProviderId, String> keys = {};
 
   /// Manual capability overrides by `'{provider.wireName}/{model}'`.
@@ -334,7 +333,6 @@ class FakeApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
   final Map<LlmProviderId, String> baseUrls = {};
   final Map<LlmProviderId, Map<String, String>> headers = {};
   LlmProviderId? selected;
-  final Map<(LlmProviderId, String), Set<AiInputKind>> inputOverrides = {};
 
   @override
   Future<String?> getApiKey(LlmProviderId provider) async => keys[provider];
@@ -390,24 +388,6 @@ class FakeApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
     Map<String, String> value,
   ) async => headers[provider] = value;
 
-  @override
-  Future<Set<AiInputKind>> getInputOverride(
-    LlmProviderId provider,
-    String model,
-  ) async => inputOverrides[(provider, model)] ?? const {};
-
-  @override
-  Future<void> setInputOverride(
-    LlmProviderId provider,
-    String model,
-    Set<AiInputKind> kinds,
-  ) async {
-    if (kinds.isEmpty) {
-      inputOverrides.remove((provider, model));
-    } else {
-      inputOverrides[(provider, model)] = {...kinds};
-    }
-  }
 
   @override
   Future<Set<LlmProviderId>> configuredProviders() async => keys.keys.toSet();
@@ -419,7 +399,7 @@ class FakeApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
     models.clear();
     baseUrls.clear();
     headers.clear();
-    inputOverrides.clear();
+    overrides.clear();
     selected = null;
   }
 

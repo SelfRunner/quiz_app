@@ -195,11 +195,8 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     return m.isEmpty ? _provider.defaultModel : m;
   }
 
-  /// The override store, when the key store supports it.
-  AiCapabilityOverrideStore? get _overrideStore {
-    final Object store = ref.read(apiKeyStoreProvider);
-    return store is AiCapabilityOverrideStore ? store : null;
-  }
+  AiCapabilityOverrideStore? get _overrideStore =>
+      ref.read(apiKeyStoreProvider);
 
   /// OpenAI-compatible endpoint whose capabilities cannot be detected (not
   /// OpenRouter): the user may declare image / PDF support.
