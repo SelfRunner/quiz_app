@@ -309,6 +309,20 @@ class FakeRemote
   @override
   Future<Map<String, dynamic>> insertShare(Map<String, dynamic> row) async {
     _checkOnline();
+    // RLS: the caller must own the (server-side) resource.
+    final table = switch (row['resource_type']) {
+      'subject' => SyncTables.subjects,
+      'note' => SyncTables.notes,
+      _ => SyncTables.quizzes,
+    };
+    final resource = tables[table]![row['resource_id']];
+    if (resource == null || resource['owner_id'] != userId) {
+      throw const RemoteException(
+        RemoteErrorKind.permanent,
+        'new row violates row-level security policy for table "shares"',
+        code: '42501',
+      );
+    }
     final dup = shares.any(
       (s) =>
           s['resource_type'] == row['resource_type'] &&
@@ -451,13 +465,21 @@ class FakeConnectivity implements ConnectivityMonitor {
   bool online = true;
   final StreamController<bool> _changes = StreamController<bool>.broadcast();
 
+  /// Delay inside [isOnline] after the value is read (a slow platform check
+  /// whose result can be stale by the time it returns).
+  Future<void> Function()? checkDelay;
+
   void set(bool value) {
     online = value;
     _changes.add(value);
   }
 
   @override
-  Future<bool> isOnline() async => online;
+  Future<bool> isOnline() async {
+    final value = online;
+    await checkDelay?.call();
+    return value;
+  }
 
   @override
   Stream<bool> get onChanged => _changes.stream;

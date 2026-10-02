@@ -84,10 +84,11 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
 
     setState(() => _busy = true);
     final repo = ref.read(shareRepositoryProvider);
+    Profile? profile;
     try {
-      final profile = await repo.findUserByEmail(email);
+      final found = profile = await repo.findUserByEmail(email);
       if (!mounted) return;
-      if (profile == null) {
+      if (found == null) {
         setState(
           () => _fieldError =
               'No account found for $email. Ask them to sign up first, then '
@@ -95,29 +96,37 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
         );
         return;
       }
-      if (profile.id == ref.read(currentUserIdProvider)) {
+      if (found.id == ref.read(currentUserIdProvider)) {
         setState(() => _fieldError = "You can't share with yourself.");
         return;
       }
+      // Fast path from the loaded list; the server's unique constraint
+      // (AlreadySharedException below) is the source of truth.
       final existing = ref.read(sharesForResourceProvider(_key)).value;
-      if (existing != null &&
-          existing.any((s) => s.recipientId == profile.id)) {
-        setState(
-          () => _fieldError =
-              'Already shared with ${profileLabel(profile, fallback: email)}.',
-        );
+      if (existing != null && existing.any((s) => s.recipientId == found.id)) {
+        setState(() => _fieldError = _alreadySharedText(found, email));
         return;
       }
       final share = await repo.share(
         resourceType: widget.type,
         resourceId: widget.resourceId,
-        recipientId: profile.id,
+        recipientId: found.id,
       );
       if (!mounted) return;
       _email.clear();
       ref.invalidate(sharesForResourceProvider(_key));
       _setNotice(
-        'Shared with ${profileLabel(share.recipient ?? profile, fallback: email)}.',
+        'Shared with ${profileLabel(share.recipient ?? found, fallback: email)}.',
+      );
+    } on AlreadySharedException catch (e) {
+      if (!mounted) return;
+      // The list was stale (e.g. shared from another device): refresh it.
+      ref.invalidate(sharesForResourceProvider(_key));
+      final who = profile;
+      setState(
+        () => _fieldError = who == null
+            ? e.message
+            : _alreadySharedText(who, email),
       );
     } on ValidationException catch (e) {
       if (mounted) setState(() => _fieldError = e.message);
@@ -127,6 +136,9 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  static String _alreadySharedText(Profile profile, String email) =>
+      'Already shared with ${profileLabel(profile, fallback: email)}.';
 
   Future<void> _revoke(Share share) async {
     final name = profileLabel(share.recipient);

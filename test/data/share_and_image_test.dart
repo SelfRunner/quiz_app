@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive_ce/hive_ce.dart';
 import 'package:quiz_app/core/errors/app_exception.dart';
 import 'package:quiz_app/data/models/models.dart';
+import 'package:quiz_app/data/remote/remote_data_source.dart';
 import 'package:quiz_app/data/repositories/local_image_store.dart';
 import 'package:quiz_app/data/repositories/local_note_repository.dart';
 import 'package:quiz_app/data/repositories/local_subject_repository.dart';
@@ -104,13 +106,22 @@ void main() {
         expect(remote.tables['subjects']!.containsKey(s.id), isTrue);
         expect(share.recipient?.displayName, 'Bob');
 
-        // Idempotent.
-        final again = await shares.share(
-          resourceType: ShareResourceType.subject,
-          resourceId: s.id,
-          recipientId: 'user-b',
+        // Sharing again: unique violation 23505 -> AlreadySharedException.
+        await expectLater(
+          shares.share(
+            resourceType: ShareResourceType.subject,
+            resourceId: s.id,
+            recipientId: 'user-b',
+          ),
+          throwsA(
+            isA<AlreadySharedException>().having(
+              (e) => e.message,
+              'message',
+              contains('already shared'),
+            ),
+          ),
         );
-        expect(again.id, share.id);
+        expect(remote.shares, hasLength(1));
 
         final listed = await shares.listSharesFor(
           ShareResourceType.subject,
@@ -151,6 +162,43 @@ void main() {
       );
     });
 
+    test('share() of an item that has not been uploaded yet says so '
+        '(not a permission error)', () async {
+      final s = await subjects.create(title: 'Bio');
+      // The server keeps failing to save it (outage), so it stays queued.
+      remote.upsertHook = (_, _) =>
+          const RemoteException(RemoteErrorKind.transient, 'boom', code: '503');
+      await expectLater(
+        shares.share(
+          resourceType: ShareResourceType.subject,
+          resourceId: s.id,
+          recipientId: 'user-b',
+        ),
+        throwsA(
+          isA<NetworkException>().having(
+            (e) => e.message,
+            'message',
+            contains("hasn't finished uploading"),
+          ),
+        ),
+      );
+      expect(syncCalls, 1); // tried to push it first
+      expect(remote.shares, isEmpty);
+
+      // Server-side refusals unrelated to a pending upload stay as they were.
+      remote.upsertHook = null;
+      await engine.sync();
+      remote.tables['subjects']![s.id]!['owner_id'] = 'someone-else';
+      await expectLater(
+        shares.share(
+          resourceType: ShareResourceType.subject,
+          resourceId: s.id,
+          recipientId: 'user-b',
+        ),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
+
     test('sharedWithMe joins owner profile and resource title', () async {
       remote.serverWrite('notes', noteRow('bn', 'user-b', 'bs', title: 'T'));
       remote.shares.add({
@@ -164,6 +212,114 @@ void main() {
       final list = await shares.sharedWithMe();
       expect(list.single.owner?.displayName, 'Bob');
       expect(list.single.resourceTitle, 'T');
+    });
+
+    group('sharedWithMe offline', () {
+      void addShare(String id, String type, String resourceId) =>
+          remote.shares.add({
+            'id': id,
+            'owner_id': 'user-b',
+            'recipient_id': 'user-a',
+            'resource_type': type,
+            'resource_id': resourceId,
+            'created_at': '2026-01-01T00:00:00Z',
+          });
+
+      SupabaseShareRepository repoFor(TestHive hive) => SupabaseShareRepository(
+        ctx: hive.context(),
+        remote: remote,
+        imageCopies: NoteImageCopyProcessor(remote, hive.db.images),
+        connectivity: connectivity,
+        sync: () async {},
+      );
+
+      test('serves the last fetched list after an app restart', () async {
+        remote.serverWrite('notes', noteRow('bn', 'user-b', 'bs', title: 'T'));
+        addShare('sh', 'note', 'bn');
+        expect(await shares.sharedWithMe(), hasLength(1));
+
+        // Restart: close and reopen Hive, new repository, no connectivity.
+        await engine.dispose();
+        await Hive.close();
+        h.db = await h.openDb();
+        engine = DefaultSyncEngine(
+          db: h.db,
+          remote: remote,
+          imageRemote: remote,
+          currentUserId: () => h.userId,
+          connectivity: connectivity,
+          clock: h.clockFn,
+        );
+        connectivity.online = false;
+        remote.offline = true;
+
+        final list = await repoFor(h).sharedWithMe();
+        expect(list.single.id, 'sh');
+        expect(list.single.owner?.displayName, 'Bob');
+        expect(list.single.resourceTitle, 'T');
+        expect(list.single.resourceType, ShareResourceType.note);
+      });
+
+      test('falls back to the cache when requests fail in transit', () async {
+        remote.serverWrite('notes', noteRow('bn', 'user-b', 'bs', title: 'T'));
+        addShare('sh', 'note', 'bn');
+        await shares.sharedWithMe();
+        remote.offline = true; // interface up, server unreachable
+        expect((await shares.sharedWithMe()).single.id, 'sh');
+      });
+
+      test('later syncs drop revoked shares and add new ones from the local '
+          'cache', () async {
+        remote.serverWrite('subjects', subjectRow('bs', 'user-b', title: 'B'));
+        remote.serverWrite('notes', noteRow('bn', 'user-b', 'bs', title: 'T'));
+        remote.serverWrite('quizzes', quizRow('bq', 'user-b', 'bs'));
+        addShare('sh-note', 'note', 'bn');
+        await engine.sync();
+        expect((await shares.sharedWithMe()).map((s) => s.id), ['sh-note']);
+
+        // Changes seen by sync only (the list isn't refetched online).
+        remote.shares.clear();
+        addShare('sh-quiz', 'quiz', 'bq');
+        await engine.sync();
+        expect(h.db.quizzes.get('bq'), isNotNull);
+        connectivity.online = false;
+
+        final list = await shares.sharedWithMe();
+        final derived = list.single;
+        expect(derived.resourceType, ShareResourceType.quiz);
+        expect(derived.resourceId, 'bq');
+        expect(derived.ownerId, 'user-b');
+        expect(derived.recipientId, 'user-a');
+        expect(derived.resourceTitle, 'Q');
+      });
+
+      test(
+        'derives the list from sync data when nothing was fetched',
+        () async {
+          remote.serverWrite(
+            'subjects',
+            subjectRow('bs', 'user-b', title: 'B'),
+          );
+          addShare('sh', 'subject', 'bs');
+          await engine.sync();
+          connectivity.online = false;
+          final list = await shares.sharedWithMe();
+          expect(list.single.resourceId, 'bs');
+          expect(list.single.resourceTitle, 'B');
+        },
+      );
+
+      test("another user's cached list is never shown", () async {
+        remote.serverWrite('notes', noteRow('bn', 'user-b', 'bs', title: 'T'));
+        addShare('sh', 'note', 'bn');
+        await shares.sharedWithMe();
+        h.userId = 'user-c';
+        connectivity.online = false;
+        await expectLater(
+          repoFor(h).sharedWithMe(),
+          throwsA(isA<NetworkException>()),
+        );
+      });
     });
 
     test('copyToMyAccount copies via RPC, copies images, then syncs', () async {

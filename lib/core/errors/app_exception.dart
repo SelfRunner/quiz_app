@@ -48,6 +48,13 @@ final class ValidationException extends AppException {
   const ValidationException(super.message, {super.cause, super.stackTrace});
 }
 
+/// The resource is already shared with that recipient (unique violation
+/// `23505` on `shares`). A [ValidationException], so generic handlers that
+/// show validation errors inline keep working.
+final class AlreadySharedException extends ValidationException {
+  const AlreadySharedException(super.message, {super.cause, super.stackTrace});
+}
+
 /// Local storage / sync failures.
 final class StorageException extends AppException {
   const StorageException(super.message, {super.cause, super.stackTrace});

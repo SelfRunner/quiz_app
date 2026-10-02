@@ -36,7 +36,8 @@ files, take either side and rerun build_runner.
 - `app_exception.dart`: `sealed class AppException implements Exception
   { String message; Object? cause; StackTrace? stackTrace; }` with subclasses
   `NetworkException`, `AppAuthException`, `NotFoundException`,
-  `PermissionDeniedException`, `ValidationException`, `StorageException`,
+  `PermissionDeniedException`, `ValidationException` (subclass
+  `AlreadySharedException`: share already exists), `StorageException`,
   `AiException { AiErrorKind kind; int? statusCode; }`
   (`AiErrorKind`: missingApiKey, invalidApiKey, rateLimited, invalidOutput,
   unsupported, provider), `TranscriptUnavailableException`, `UnknownException`.
@@ -169,7 +170,7 @@ abstract interface class AttemptRepository {
   Future<void> delete(String id);
 }
 
-abstract interface class ShareRepository {    // online-only
+abstract interface class ShareRepository {    // online-only (sharedWithMe: offline cache)
   Future<Profile?> findUserByEmail(String email);
   Future<Share> share({required ShareResourceType resourceType, required String resourceId, required String recipientId});
   Future<void> revoke(String shareId);
@@ -186,7 +187,8 @@ abstract interface class ImageStore {
 }
 
 enum SyncState { idle, syncing, offline, error }
-class SyncStatus { SyncState state; DateTime? lastSyncedAt; int pendingOps; String? error; } // freezed
+class SyncStatus { SyncState state; DateTime? lastSyncedAt; int pendingOps; String? error;
+  int stuckOps; int rejectedChanges; } // freezed (last two added in Phase 3)
 abstract interface class SyncEngine {
   Stream<SyncStatus> get status;
   SyncStatus get currentStatus;
@@ -340,28 +342,40 @@ cache), `lib/data/remote/` (`*RemoteDataSource` interfaces +
   `42501`, CHECK `23514`): the op is dropped, the server version of the row
   is restored locally, `status.error` is set, and
   `(engine as DefaultSyncEngine).rejections` emits a `SyncRejection` (for a
-  snackbar).
+  snackbar). The user's rejected row JSON is kept in `sync_meta` (max 50):
+  `engine.rejectedChanges` (`RejectedChange{id, table, rowId, payload,
+  message, at}`), count in `status.rejectedChanges`,
+  `engine.dismissRejectedChange(id)`.
+- Stuck changes: ops that keep failing with server errors (5xx/unknown) are
+  **never dropped**; after 8 attempts they count in `status.stuckOps` (state
+  `error`, message "... Retrying automatically.") and keep retrying.
 - Widget tests: override the repository providers (or `syncEngineProvider`
   + `localDatabaseProvider` + `*RemoteDataSourceProvider`s) — the real
   providers need Supabase and opened Hive boxes.
 
 **Sync triggers**: sign-in (and app start with a session), connectivity
-regained (`connectivity_plus`), app resumed/shown, every 5 min while
+regained (`connectivity_plus`; a connectivity change during a running cycle
+queues one more cycle, and `sync()` callers joining it wait for that too), app resumed/shown, every 5 min while
 foregrounded, 2 s after any local write (debounced), manual `sync()`, plus
 exponential backoff retries (5 s .. 5 min) after network/transient errors.
 `SupabaseAuthRepository.signOut` first tries a final push (max 10 s).
 
 **Sign-out / account switch**: all user-scoped boxes (entities, outbox,
-`sync_meta`, image cache) are wiped when the auth stream emits null or a
-different user id (`prefs` is kept). Unpushed changes are lost after the
-best-effort final push.
+`sync_meta`, image cache) are wiped only on an **explicit** sign-out
+(`AuthRepository.signOut` -> `SupabaseAuthRepository.afterSignOut` ->
+`DefaultSyncEngine.clearAfterSignOut()`) or when a **different** user signs
+in (`prefs` is kept). Unpushed changes are lost after the best-effort final
+push. An involuntary sign-out (session expired / refresh token revoked) only
+stops syncing; local data and the outbox are kept and pushed when the same
+user signs back in.
 
 **Sync algorithm**
 - Push: outbox FIFO; upserts of the same row coalesce in place. Network error
   -> stop, `offline`; JWT error -> `error`; FK `23503` -> deferred and retried
   (3 passes); permanent (`42501`, `23xxx`, `22xxx`, `P0001/P0002`, 4xx) ->
-  dropped + reported; transient (5xx/unknown) -> retried, dropped after 8
-  attempts.
+  dropped + reported (payload kept, see above); transient (5xx/unknown,
+  408/429) -> retried with capped backoff, never dropped (FK-blocked ops are
+  not counted while other ops fail transiently).
 - After push, pending `note_image_copies` rows are processed (Storage copy
   `from_path` -> `to_path`, then the row is deleted; also deleted when the
   source is gone/unreadable or the target exists).
@@ -394,8 +408,17 @@ Signed out -> `AppAuthException`.
 
 **ShareRepository** (online-only): offline -> `NetworkException("You're
 offline. Sharing needs an internet connection.")`. `share()` pushes pending
-local changes first, is idempotent (unique violation -> returns existing),
-self-share -> `ValidationException`. Lists embed profiles via
+local changes first; unique violation (`23505`/409) ->
+`AlreadySharedException` (a `ValidationException`; the share sheet shows
+"Already shared with X." and refreshes its list); resource still queued for
+upload (server refuses with RLS/FK) -> `NetworkException("... hasn't finished
+uploading yet ...")`; self-share -> `ValidationException`.
+`sharedWithMe()` works offline: every online fetch is persisted in
+`sync_meta` (`shared_with_me`, with owner profile + title, per user); offline
+or on a network error it returns that list (titles refreshed from Hive),
+minus shares revoked / plus shares added according to later syncs'
+`incoming_shares` keys (added ones are derived from the cached rows). Throws
+`NetworkException` only when nothing is known. Lists embed profiles via
 `profiles!shares_recipient_id_fkey` / `profiles!shares_owner_id_fkey`;
 `sharedWithMe()` fills `resourceTitle` from local cache, else the table.
 `findUserByEmail` returns `Profile(id, displayName, email)`.

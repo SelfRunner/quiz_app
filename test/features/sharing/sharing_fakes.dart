@@ -114,6 +114,14 @@ class FakeShareRepository implements ShareRepository {
     if (recipientId == meId) {
       throw const ValidationException("You can't share with yourself.");
     }
+    if ((sharesByResource[resourceId] ?? const <Share>[]).any(
+      (s) => s.recipientId == recipientId,
+    )) {
+      // Mirrors the unique violation (23505) mapping of the real repository.
+      throw const AlreadySharedException(
+        'This item is already shared with that person.',
+      );
+    }
     final recipient = usersByEmail.values.firstWhere(
       (p) => p.id == recipientId,
     );

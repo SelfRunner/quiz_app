@@ -13,7 +13,9 @@ import '../sharing_ui.dart';
 import '../widgets/shared_by_chip.dart';
 
 /// Last successfully loaded shared-with-me list (per user, in memory), shown
-/// while offline or while a refresh is in flight.
+/// while a refresh is in flight or fails. Offline (also after a restart) the
+/// repository itself serves the list persisted in Hive, so the screen shows
+/// data plus the stale banner rather than an error.
 final _lastSharedWithMeProvider =
     NotifierProvider<_LastSharedWithMe, ({String userId, List<Share> shares})?>(
       _LastSharedWithMe.new,
