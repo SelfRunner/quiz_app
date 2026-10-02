@@ -93,7 +93,7 @@ properties required, nullables as `type: [x, 'null']`,
 - `notes(id, subject_id uuid -> subjects, owner_id, title, content_md text not null default '', created_at, updated_at, deleted_at)`
 - `quizzes(id, subject_id -> subjects, note_id uuid null -> notes, owner_id, title, description, source jsonb, questions jsonb not null default '[]', created_at, updated_at, deleted_at)`
 - `quiz_attempts(id, quiz_id -> quizzes, owner_id, answers jsonb not null default '[]', score double precision, total int, started_at, completed_at, created_at, updated_at, deleted_at)` — note: the column is `owner_id` (not `user_id`) so all synced tables are uniform.
-- `shares(id, owner_id, recipient_id -> profiles, resource_type text check in ('subject','note','quiz'), resource_id uuid, created_at)` unique (resource_type, resource_id, recipient_id).
+- `shares(id, owner_id, recipient_id -> profiles, resource_type text check in ('subject','note','quiz','deck'), resource_id uuid, created_at)` (`'deck'` since Wave 2, see *Study*) unique (resource_type, resource_id, recipient_id).
 - `owner_id` defaults to `auth.uid()`; `updated_at` is set by a trigger (`now()`) on insert/update and drives the sync cursor; client-provided `id` and `created_at` are accepted.
 - RPCs (`lib/data/remote/supabase_api.dart` `SupabaseRpc`):
   `find_user_by_email(p_email text) returns table(id uuid, display_name text, email text)` (confirmed-email users only; shares to unconfirmed users are rejected with `42501`);
@@ -102,6 +102,7 @@ properties required, nullables as `type: [x, 'null']`,
   `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null) returns uuid`.
 - Storage bucket `note-images`, object path `{owner_id}/{note_id}/{uuid}.{ext}`.
 - `attachments(...)` + Storage bucket `attachments`: see *Attachments* below.
+- `decks`, `card_reviews`, `mistakes`, `copy_deck`, exam-mode columns on `quiz_attempts`: see *Study (Wave 2)* below.
 
 ### Attachments (backend: `supabase/migrations/20261004000000_attachments.sql`)
 
@@ -186,6 +187,147 @@ non-owned cached attachments, and purge their cached bytes).
 6. *Errors*: `42501` (not owner, subject not owned, immutable column),
    `23514` (bad `kind`, path shape, text too long), `23503` (subject not
    synced yet: defer like notes).
+
+### Study (Wave 2) (backend: `supabase/migrations/20261005000000_study.sql`)
+
+All three new tables are synced tables with the usual conventions: client
+`id` (uuid) + `created_at`; `owner_id` defaults to `auth.uid()` and is
+immutable (`42501`); `updated_at` is server `now()` (sync cursor, keyset like
+the others); soft delete via `deleted_at`; upsert with `onConflict: 'id'`.
+
+**Table `public.decks`** — flashcard decks. Shared, synced and copied exactly
+like `quizzes`.
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | client-generated |
+| `subject_id` | uuid not null → subjects (on delete cascade) | must exist (`23503`) and be owned by the deck owner (`42501`); **overwritten with the note's subject when `note_id` is set** (moving a note moves its decks) |
+| `note_id` | uuid null → notes (on delete cascade) | must exist (`23503`) and be owned by the deck owner (`42501`) |
+| `owner_id` | uuid not null default `auth.uid()` | immutable |
+| `title` | text not null | |
+| `description` | text null | |
+| `source` | jsonb null | JSON object or null (`23514`); same shape as `QuizSource` (`context_text`, `youtube_url`, `provider`, `model`) |
+| `cards` | jsonb not null default `[]` | array of `{"id": text, "front": text, "back": text, "hint"?: text \| null}`; `id` 1..255 chars and **unique within the deck**; extra keys allowed (`23514` otherwise) |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | as other synced tables |
+
+Card `id`s are stable keys (generate a uuid v4 string per card, keep it when
+editing front/back); `card_reviews` reference them. `copy_*` keep card ids.
+
+Read access (`can_read_deck(p_deck_id uuid) returns boolean`): owner
+(including own tombstones), or the deck, its subject and (if any) its note
+are not soft-deleted and the caller holds a share from the deck owner on the
+**deck**, its **subject** or its **note**. Writes: owner only.
+
+**Table `public.card_reviews`** — private per-user spaced-repetition state
+(FSRS-ready). Never shared; SELECT/UPDATE/DELETE owner only. INSERT also
+requires `can_read_deck(deck_id)` (`42501`), so users review their own decks
+and decks shared with them.
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | see *Deterministic ids* below |
+| `owner_id` | uuid not null default `auth.uid()` | the reviewing user; immutable |
+| `deck_id` | uuid not null → decks (on delete cascade) | immutable (`42501`) |
+| `card_id` | text not null | 1..255 chars; `cards[].id`; immutable (`42501`) |
+| `state` | smallint not null default 0 | 0 new, 1 learning, 2 review, 3 relearning (FSRS `State`), `23514` otherwise |
+| `due_at` | timestamptz not null default now() | |
+| `stability`, `difficulty` | double precision not null default 0 | ≥ 0 |
+| `elapsed_days`, `scheduled_days`, `reps`, `lapses` | integer not null default 0 | ≥ 0 |
+| `last_review_at` | timestamptz null | |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | |
+
+Unique `(owner_id, deck_id, card_id)` → `23505` on a second row for the same card.
+
+**Table `public.mistakes`** — private per-user wrong-answer tracking (the
+Mistakes practice set). Never shared; owner only; INSERT also requires
+`can_read_quiz(quiz_id)` (`42501`).
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | see *Deterministic ids* |
+| `owner_id` | uuid not null default `auth.uid()` | immutable |
+| `quiz_id` | uuid not null → quizzes (on delete cascade) | immutable (`42501`) |
+| `question_id` | text not null | 1..255 chars; `questions[].id`; immutable (`42501`) |
+| `wrong_count` | integer not null default 0 | ≥ 0 |
+| `correct_streak` | integer not null default 0 | ≥ 0 (consecutive correct answers since the last wrong one) |
+| `last_wrong_at` | timestamptz null | |
+| `resolved_at` | timestamptz null | set when the user masters it (e.g. streak reached); null = still in the set |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | |
+
+Unique `(owner_id, quiz_id, question_id)` → `23505`.
+
+**Exam mode: new `quiz_attempts` columns** (additive; old clients keep working,
+an upsert that omits them leaves them untouched):
+
+| Column | Type | Rules |
+|---|---|---|
+| `mode` | text not null default `'practice'` | `practice`, `exam` or `mistakes` (`23514`) |
+| `time_limit_seconds` | integer null | > 0 |
+| `question_ids` | jsonb null | JSON array of question ids served (the random subset of a pool, in order); null = all questions |
+| `duration_seconds` | integer null | ≥ 0, time actually spent |
+
+A `mistakes`-mode attempt is recorded against a single `quiz_id` (one attempt
+per quiz practised in a mixed session, or none: mistakes themselves are
+tracked in `mistakes`).
+
+**Sharing**: `ShareResourceType` gains `deck` (JSON `'deck'`). Share a deck
+with `shares.insert({recipient_id, resource_type: 'deck', resource_id})`
+(owner of a live deck under live parents, confirmed recipient, else `42501`).
+`share_details.resource_title` includes deck titles. Soft- or hard-deleting a
+deck deletes its shares. Older builds that do not know `deck` must ignore
+such share rows instead of failing to parse.
+
+**RPCs**
+- `can_read_deck(p_deck_id uuid) returns boolean`.
+- `copy_deck(p_deck_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null) returns uuid`
+  — same rules as `copy_quiz` (readable, live source → else `P0002`; target
+  subject owned and live, optional target note owned, live and in that
+  subject → else `42501`). Copies `title, description, source, cards`;
+  review state is not copied.
+- `copy_subject` now also copies live subject-level decks; `copy_note` (and
+  therefore `copy_subject` for each note) also copies the note's live decks
+  (`note_id` remapped).
+- Fixed: `copy_note` / `copy_quiz` (and `copy_deck`) now work for recipients
+  of a direct note/quiz/deck share who cannot see the parent subject (they
+  previously returned `P0002`).
+
+**Sync notes for the data layer**
+1. *Tables*: add `decks`, `card_reviews`, `mistakes` to `SyncTables.synced`
+   (pull by `updated_at` cursor, push via the outbox, `onConflict: 'id'`).
+   `decks` is a shared table (same handling as `quizzes`: owned rows +
+   rows readable through shares, reconcile ids of non-owned cached decks on
+   each sync since recipients never get tombstones). `card_reviews` and
+   `mistakes` are private: the server only ever returns the caller's own rows
+   (including own tombstones), so no reconciliation is needed.
+2. *New shares*: when a `subject`, `note` or `deck` share appears, fetch
+   `decks` for that resource (`subject_id` / `note_id` / `id`) without the
+   cursor, as for quizzes.
+3. *Deterministic ids* (important): because of the unique keys, two devices
+   creating the row for the same card/question offline would collide
+   (`23505`). Derive the id instead of using v4:
+   `card_reviews.id = const Uuid().v5(Namespace.url.value, 'quizapp:card_review:{owner_id}:{deck_id}:{card_id}')`,
+   `mistakes.id = const Uuid().v5(Namespace.url.value, 'quizapp:mistake:{owner_id}:{quiz_id}:{question_id}')`
+   (package `uuid` 4.x)
+   (lowercase uuids). Every device then upserts the same row (last write
+   wins on `updated_at`). Should a `23505` still occur, pull the existing row
+   by `(deck_id, card_id)` / `(quiz_id, question_id)`, adopt its id and
+   re-apply the change; never retry blindly.
+4. *Revocation*: when a deck/quiz stops being readable, the user's
+   `card_reviews` / `mistakes` rows stay (server keeps them); the client
+   should hide rows whose deck/quiz is not in the local cache (not delete
+   them). New inserts for an unreadable deck/quiz fail with `42501`: drop the
+   outbox op. A hard-deleted deck/quiz cascades on the server, rows vanish
+   without tombstones; purge locally when the parent is gone.
+5. *Card removal*: deleting a card from `decks.cards` does not touch
+   `card_reviews`; ignore reviews whose `card_id` is no longer in the deck
+   (optionally soft-delete them).
+6. *Due queue*: "due today" = own `card_reviews` with `deleted_at is null`
+   and `due_at <= end of today`, joined locally to cached decks (cards
+   without a review row are `new`). Server index `(owner_id, due_at)`
+   exists if a remote query is ever needed.
+7. *Errors*: `42501` (not owner / not readable / immutable key), `23514`
+   (bad cards JSON, `state`, `mode`, negative counters), `23505` (duplicate
+   review/mistake key, see 3), `23503` (parent not synced yet: defer).
 
 ## Local storage (`lib/data/local/hive_boxes.dart`)
 

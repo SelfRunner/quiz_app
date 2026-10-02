@@ -12,9 +12,10 @@ supabase/
     20261002000100_storage.sql        note-images bucket + storage.objects policies
     20261003000000_hardening.sql      confirmed-email sharing, soft-delete hardening
     20261004000000_attachments.sql    subject attachments (table, RLS, bucket, copy_subject)
+    20261005000000_study.sql          decks, card_reviews, mistakes, exam-mode attempt columns
   tests/
     01_rls.sql  02_rpc.sql  03_storage.sql  04_hardening.sql  05_attachments.sql
-                                      pgTAP tests (244 assertions)
+    06_study.sql                      pgTAP tests (328 assertions)
     local_stubs/                      LOCAL VALIDATION ONLY (plain Postgres)
 ```
 
@@ -31,9 +32,12 @@ supabase db push            # applies supabase/migrations in order
 **SQL editor (no CLI)**: open the project's SQL editor and run
 `migrations/20261002000000_init.sql`, then `migrations/20261002000100_storage.sql`,
 then `migrations/20261003000000_hardening.sql`, then
-`migrations/20261004000000_attachments.sql`, each as one script, in that
+`migrations/20261004000000_attachments.sql`, then
+`migrations/20261005000000_study.sql`, each as one script, in that
 order. A project that already ran some of them only needs the later ones
-(the hardening and attachments migrations are safe to run more than once).
+(the hardening, attachments and study migrations are safe to run more than
+once; the study migration also works when the editor runs it as a single
+transaction, see *Study*).
 
 After applying, in the dashboard:
 - Authentication → Providers → Email: enabled (email/password).
@@ -102,7 +106,9 @@ delete them under Authentication -> Users.
 |---|---|
 | `profiles` | `id` = `auth.users.id`; `email`, `display_name`. Created by trigger on signup (`raw_user_meta_data->>'display_name'`, fallback: email local part); email kept in sync. Only `display_name` is client-updatable. |
 | `subjects`, `notes`, `quizzes`, `quiz_attempts` | Synced tables: client `id`/`created_at` accepted, `owner_id` defaults to `auth.uid()`, `updated_at` forced to server `now()`, soft delete via `deleted_at`. |
-| `shares` | `(resource_type, resource_id, recipient_id)` unique; `resource_type` is the enum `share_resource_type` (`subject`/`note`/`quiz`, same JSON strings as a text column). FKs `shares_owner_id_fkey` / `shares_recipient_id_fkey` → `profiles`. |
+| `decks` | Flashcard decks; synced, shared and copied exactly like `quizzes` (subject + optional note). See *Study*. |
+| `card_reviews`, `mistakes` | Private per-user study state (spaced repetition per card, wrong answers per question). Synced, never shared. See *Study*. |
+| `shares` | `(resource_type, resource_id, recipient_id)` unique; `resource_type` is the enum `share_resource_type` (`subject`/`note`/`quiz`/`deck`, same JSON strings as a text column). FKs `shares_owner_id_fkey` / `shares_recipient_id_fkey` → `profiles`. |
 | `attachments` | Files attached to a subject ("Files" library). Synced table like `notes`; blob in bucket `attachments` at `storage_path`. See *Attachments*. |
 | `note_image_copies` | Per-user queue of Storage copies produced by `copy_*` (see below); `bucket` says which bucket (`note-images` default, or `attachments`). |
 | `share_details` (view) | `shares` + `resource_title`, `security_invoker` (caller's RLS applies). |
@@ -144,6 +150,9 @@ caller holds a share whose `owner_id` equals the row's owner and that targets:
 | shares | owner or recipient | INSERT: `owner_id = auth.uid()`, recipient ≠ self and has a confirmed email, caller owns the resource and neither it nor a parent is soft-deleted. DELETE: owner. No UPDATE. |
 | profiles | self, or the other party of a share in either direction | UPDATE `display_name` of self |
 | attachments | owner, or `can_read_attachment(id)`: live attachment (`deleted_at is null`) whose subject passes `can_read_subject` (subject shares only) | owner only; subject must be owned by the same user |
+| decks | owner or `can_read_deck` (same rules as quizzes, share type `deck`) | owner only; subject/note must be owned by the same user |
+| card_reviews | owner only | owner only; INSERT also needs `can_read_deck(deck_id)` |
+| mistakes | owner only | owner only; INSERT also needs `can_read_quiz(quiz_id)` |
 | note_image_copies | owner | INSERT (own folder only) / DELETE by owner |
 
 `anon` has no table or function privileges. Supabase's default grants
@@ -190,9 +199,10 @@ so the migration only enables it and emits a NOTICE.
 | RPC | Returns | Notes |
 |---|---|---|
 | `find_user_by_email(p_email text)` | `table(id uuid, display_name text, email text)` | Exact, case-insensitive, trimmed match among users with a confirmed email (`auth.users.email_confirmed_at is not null`); 0 or 1 row; no wildcards. `email` is an extra column (superset of CONTRACTS.md). |
-| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`; the subject must not be deleted. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes, `note_id` remapped), non-deleted subject-level quizzes and non-deleted attachments (blobs queued, see below). |
-| `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; the note and its subject must not be deleted; target subject must be owned by the caller and not deleted. Also copies the note's non-deleted quizzes. |
+| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`; the subject must not be deleted. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes and decks, `note_id` remapped), non-deleted subject-level quizzes and decks, and non-deleted attachments (blobs queued, see below). |
+| `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; the note and its subject must not be deleted; target subject must be owned by the caller and not deleted. Also copies the note's non-deleted quizzes and decks. |
 | `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new quiz id) | Needs `can_read_quiz`; the quiz, its subject and (if any) its note must not be deleted; target subject owned; target note (optional) owned, not deleted and in the target subject. |
+| `copy_deck(p_deck_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new deck id) | Same rules as `copy_quiz`, with `can_read_deck`. Copies `title, description, source, cards` (card ids kept); review state is not copied. |
 
 All copies are atomic (one transaction), get fresh uuids, `owner_id =
 auth.uid()`, and server timestamps. The `copy_*` functions are
@@ -311,3 +321,52 @@ so re-running it is harmless.
    `subjects`, `notes`, `quizzes` delete the shares pointing at a row when
    its `deleted_at` goes from null to non-null. A one-time cleanup deletes
    existing shares that already point at soft-deleted rows.
+
+## Study (`20261005000000_study.sql`)
+
+Wave 2: flashcards, spaced repetition, mistakes, exam mode. Contract for the
+Dart side: `docs/CONTRACTS.md` → *Study (Wave 2)*.
+
+- **`public.decks`** `(id, subject_id, note_id, owner_id, title, description,
+  source, cards, created_at, updated_at, deleted_at)`: a copy of the
+  `quizzes` design. Same parent rules (`tg_decks_check_parent`: subject/note
+  owned by the deck owner, `subject_id` normalized to the note's subject;
+  moving a note moves its decks), same sync triggers, same read helper
+  (`can_read_deck`: owner incl. tombstones, or the deck + subject + note are
+  live and the caller holds a share from the owner on the deck, its subject
+  or its note). Share type `deck`: `is_resource_owner` accepts live decks
+  under live parents; hard and soft delete remove the deck's shares;
+  `share_details.resource_title` covers decks.
+  `cards` CHECK (`private.deck_cards_valid`, `23514`): JSON array of objects
+  with string `id` (1..255 chars, unique in the deck), string `front`, string
+  `back`, optional `hint` (string or null); extra keys allowed.
+- **`public.card_reviews`**: one row per (owner, deck, card) (unique),
+  FSRS state (`state` 0..3 = new/learning/review/relearning, `due_at`,
+  `stability`, `difficulty`, `elapsed_days`, `scheduled_days`, `reps`,
+  `lapses`, `last_review_at`). Private: SELECT/UPDATE/DELETE owner only;
+  INSERT needs `can_read_deck(deck_id)`, so recipients can study shared
+  decks. `deck_id`/`card_id` are immutable. Rows survive revocation or a soft
+  delete of the deck (owner keeps them, like attempts); a hard delete of the
+  deck cascades to everyone's rows.
+- **`public.mistakes`**: one row per (owner, quiz, question) (unique),
+  `wrong_count`, `correct_streak`, `last_wrong_at`, `resolved_at`. Private
+  like `card_reviews`; INSERT needs `can_read_quiz(quiz_id)`;
+  `quiz_id`/`question_id` immutable.
+- **`quiz_attempts`** gains `mode` (`practice` default / `exam` /
+  `mistakes`), `time_limit_seconds` (> 0, null), `question_ids` (JSON array,
+  null), `duration_seconds` (>= 0, null). Existing clients are unaffected.
+- `copy_deck` (new), `copy_subject` and `private.copy_note_into` (replaced)
+  copy decks as described under *RPCs*.
+- **Fix**: `copy_note` / `copy_quiz` from the hardening migration checked
+  parent liveness by joining `subjects` under the caller's RLS, so a
+  recipient of a direct note or quiz share (who cannot see the subject)
+  always got `P0002`. They are replaced to use the definer helpers
+  `private.is_live_note/quiz/deck` (liveness only; access is still
+  `can_read_*`). `copy_deck` uses the same pattern.
+- **Enum value in one transaction.** `alter type ... add value 'deck'` is
+  allowed inside a transaction (PG 12+), but the new value cannot be used
+  before commit, and SQL-function / view bodies are parsed at creation. The
+  migration therefore never parses `'deck'` as the enum: it compares
+  `resource_type::text = 'deck'` (and `is_resource_owner` switches on
+  `p_resource_type::text`). Verified with `psql --single-transaction`, run
+  twice.
