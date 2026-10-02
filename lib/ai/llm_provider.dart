@@ -1,3 +1,7 @@
+import 'dart:typed_data';
+
+import 'ai_source.dart';
+
 /// Supported AI backends. Keys are stored per id in `ApiKeyStore`.
 enum LlmProviderId {
   gemini('gemini', 'Google Gemini'),
@@ -70,10 +74,48 @@ class LlmConfig {
       'LlmConfig(${providerId.wireName}, model: $model, baseUrl: $baseUrl)';
 }
 
+/// Binary input sent alongside the prompt (see [LlmProvider.generateJson]).
+/// Text-like sources never become attachments; their text is in the prompt.
+sealed class LlmAttachment {
+  const LlmAttachment({required this.label});
+
+  /// Shown to the model in a text part right before the attachment, e.g.
+  /// `Attachment 1: lecture.pdf`, so the prompt can refer to it.
+  final String label;
+}
+
+/// A file sent inline / uploaded: PDF, image, audio or video.
+final class LlmFileAttachment extends LlmAttachment {
+  const LlmFileAttachment({
+    required super.label,
+    required this.filename,
+    required this.mimeType,
+    required this.bytes,
+    required this.kind,
+  });
+
+  final String filename;
+
+  /// Normalized MIME type (e.g. `application/pdf`, `image/png`).
+  final String mimeType;
+  final Uint8List bytes;
+
+  /// [AiInputKind.pdf], [AiInputKind.image], [AiInputKind.audio] or
+  /// [AiInputKind.video].
+  final AiInputKind kind;
+}
+
+/// A YouTube video passed by URL (Gemini only).
+final class LlmYoutubeAttachment extends LlmAttachment {
+  const LlmYoutubeAttachment({required super.label, required this.url});
+  final String url;
+}
+
 /// A configured LLM backend producing structured JSON.
 ///
 /// Errors: throws `AiException` (kind: invalidApiKey, rateLimited,
-/// unsupported, provider, invalidOutput) or `NetworkException`.
+/// unsupported, provider, invalidOutput), `ValidationException` (attachment
+/// too large for the provider) or `NetworkException`.
 abstract interface class LlmProvider {
   LlmProviderId get id;
 
@@ -84,8 +126,13 @@ abstract interface class LlmProvider {
   /// Generates a JSON object conforming to [schema] (a JSON Schema map such as
   /// `quizDraftJsonSchema`) and returns it decoded.
   ///
-  /// [youtubeUrl] is passed natively only when `id.supportsYoutubeUrl`;
-  /// otherwise throws `AiException(kind: unsupported)`.
+  /// [attachments] are sent before the prompt, each preceded by a text part
+  /// holding its label. Providers throw `AiException(kind: unsupported)`
+  /// for kinds they cannot take (e.g. audio to OpenAI, YouTube URLs to
+  /// anything but Gemini) and `ValidationException` when a file exceeds the
+  /// provider's size limits (see `ProviderLimits`).
+  /// [youtubeUrl] is shorthand for one [LlmYoutubeAttachment] (sent first,
+  /// without a label part).
   /// [schemaName] is used where the API requires a name (e.g. `QuizDraft`).
   Future<Map<String, dynamic>> generateJson({
     required String prompt,
@@ -93,6 +140,7 @@ abstract interface class LlmProvider {
     String? schemaName,
     String? youtubeUrl,
     String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
   });
 }
 

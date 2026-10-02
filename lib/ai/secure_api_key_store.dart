@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/errors/app_exception.dart';
+import 'ai_capabilities.dart';
+import 'ai_source.dart';
 import 'api_key_store.dart';
 import 'base_url_policy.dart';
 import 'llm_provider.dart';
@@ -92,7 +94,7 @@ class InMemoryKeyValueStore implements SecureKeyValueStore {
 /// Migration: entries written before namespacing (`ai.<entry>`) are moved to
 /// the first signed-in user that uses a store (existing values of that user
 /// win), then deleted, so later users never see them.
-class SecureApiKeyStore implements ApiKeyStore {
+class SecureApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
   SecureApiKeyStore({required this.userId, SecureKeyValueStore? backend})
     : _kv = backend ?? FlutterSecureKeyValueStore();
 
@@ -107,6 +109,7 @@ class SecureApiKeyStore implements ApiKeyStore {
   static String _baseUrlEntry(LlmProviderId p) => 'base_url.${p.wireName}';
   static String _modelEntry(LlmProviderId p) => 'model.${p.wireName}';
   static String _headersEntry(LlmProviderId p) => 'headers.${p.wireName}';
+  static String _capsEntry(LlmProviderId p) => 'caps.${p.wireName}';
   static const _selectedProviderEntry = 'selected_provider';
 
   /// Every entry name a user namespace can hold.
@@ -116,6 +119,7 @@ class SecureApiKeyStore implements ApiKeyStore {
       _baseUrlEntry(p),
       _modelEntry(p),
       _headersEntry(p),
+      _capsEntry(p),
     ],
     _selectedProviderEntry,
   ];
@@ -246,6 +250,62 @@ class SecureApiKeyStore implements ApiKeyStore {
     };
     if (clean.isEmpty) return _delete(_headersEntry(provider));
     await _write(_headersEntry(provider), jsonEncode(clean));
+  }
+
+  /// `{model: [kind names]}` for [provider].
+  Future<Map<String, List<String>>> _readOverrides(
+    LlmProviderId provider,
+  ) async {
+    final raw = await _read(_capsEntry(provider));
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return {
+        for (final e in decoded.entries)
+          if (e.value is List)
+            e.key.toString(): [
+              for (final v in e.value as List)
+                if (v is String) v,
+            ],
+      };
+    } on FormatException {
+      return {};
+    }
+  }
+
+  @override
+  Future<Set<AiInputKind>> getInputOverride(
+    LlmProviderId provider,
+    String model,
+  ) async {
+    final names = (await _readOverrides(provider))[model.trim()] ?? const [];
+    return {
+      for (final k in AiInputKind.values)
+        if (names.contains(k.name)) k,
+    };
+  }
+
+  @override
+  Future<void> setInputOverride(
+    LlmProviderId provider,
+    String model,
+    Set<AiInputKind> kinds,
+  ) async {
+    final m = model.trim();
+    if (m.isEmpty) return;
+    final all = await _readOverrides(provider);
+    final names = [
+      for (final k in AiInputKind.values)
+        if (kinds.contains(k) && k != AiInputKind.text) k.name,
+    ];
+    if (names.isEmpty) {
+      all.remove(m);
+    } else {
+      all[m] = names;
+    }
+    if (all.isEmpty) return _delete(_capsEntry(provider));
+    await _write(_capsEntry(provider), jsonEncode(all));
   }
 
   @override

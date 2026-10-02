@@ -182,7 +182,8 @@ void main() {
       final parts =
           ((rc.requests.single.json['contents'] as List).single as Map)['parts']
               as List;
-      expect(parts.first, {
+      expect(parts.first, {'text': 'Attachment 1: YouTube video'});
+      expect(parts[1], {
         'fileData': {'fileUri': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'},
       });
       expect((parts.last as Map)['text'], contains('attached YouTube video'));

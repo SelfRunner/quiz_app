@@ -1,4 +1,7 @@
 import '../../core/errors/app_exception.dart';
+import '../ai_source.dart';
+import '../llm_provider.dart';
+import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
 
@@ -10,6 +13,10 @@ import 'schema_adapters.dart';
 ///   and `text.format = {type: json_schema, name, schema, strict: true}`.
 /// * Output: `output[]` items of `type: message` whose `content[]` holds
 ///   `output_text` (JSON) or `refusal`.
+/// * Attachments: `input` becomes one user message whose `content` holds
+///   `input_text` labels, `input_file` (`filename` + base64 `file_data` data
+///   URL) for PDFs, `input_image` (data URL) for images, then the prompt.
+///   No audio/video (see `ProviderLimits.openai`).
 /// * `GET {base}/v1/models`, filtered to text-generation model families.
 class OpenAiProvider extends HttpLlmProvider {
   OpenAiProvider(
@@ -55,14 +62,10 @@ class OpenAiProvider extends HttpLlmProvider {
     String? schemaName,
     String? youtubeUrl,
     String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
   }) async {
-    if (youtubeUrl != null) {
-      throw const AiException(
-        'OpenAI cannot watch YouTube videos directly; a transcript is used '
-        'instead.',
-        kind: AiErrorKind.unsupported,
-      );
-    }
+    rejectYoutube(attachments, youtubeUrl, displayName);
+    ProviderLimits.openai.check(attachments, displayName);
     final response = await postJson(
       joinUrl(_base, '/responses'),
       headers: _headers,
@@ -70,7 +73,7 @@ class OpenAiProvider extends HttpLlmProvider {
         'model': config.model,
         if (systemPrompt != null && systemPrompt.isNotEmpty)
           'instructions': systemPrompt,
-        'input': prompt,
+        'input': attachments.isEmpty ? prompt : _input(prompt, attachments),
         'store': false,
         'text': {
           'format': {
@@ -84,6 +87,29 @@ class OpenAiProvider extends HttpLlmProvider {
     );
     return _parse(response);
   }
+
+  static List<Map<String, Object?>> _input(
+    String prompt,
+    List<LlmAttachment> attachments,
+  ) => [
+    {
+      'role': 'user',
+      'content': [
+        for (final a in attachments.whereType<LlmFileAttachment>()) ...[
+          {'type': 'input_text', 'text': a.label},
+          if (a.kind == AiInputKind.image)
+            {'type': 'input_image', 'image_url': dataUrl(a.mimeType, a.bytes)}
+          else
+            {
+              'type': 'input_file',
+              'filename': a.filename,
+              'file_data': dataUrl(a.mimeType, a.bytes),
+            },
+        ],
+        {'type': 'input_text', 'text': prompt},
+      ],
+    },
+  ];
 
   Map<String, dynamic> _parse(Map<String, dynamic> response) {
     final buffer = StringBuffer();

@@ -1,4 +1,9 @@
+import 'dart:convert';
+
 import '../../core/errors/app_exception.dart';
+import '../ai_source.dart';
+import '../llm_provider.dart';
+import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
 
@@ -11,6 +16,9 @@ import 'schema_adapters.dart';
 ///   schema}` (no beta header). If a model/endpoint rejects it, falls back to
 ///   a forced tool call (`tools[0].input_schema` + `tool_choice: {type:
 ///   tool}`).
+/// * Attachments: the user message `content` becomes blocks: a `text`
+///   label, then `document` (base64 PDF, with `title`) or `image` (base64),
+///   per file, then the prompt. No audio/video (`ProviderLimits.anthropic`).
 /// * `GET {base}/v1/models` (paged with `after_id`).
 class AnthropicProvider extends HttpLlmProvider {
   AnthropicProvider(
@@ -63,14 +71,10 @@ class AnthropicProvider extends HttpLlmProvider {
     String? schemaName,
     String? youtubeUrl,
     String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
   }) async {
-    if (youtubeUrl != null) {
-      throw const AiException(
-        'Claude cannot watch YouTube videos directly; a transcript is used '
-        'instead.',
-        kind: AiErrorKind.unsupported,
-      );
-    }
+    rejectYoutube(attachments, youtubeUrl, 'Claude');
+    ProviderLimits.anthropic.check(attachments, displayName);
     final adapted = toAnthropicSchema(schema);
     final toolName = _toolName(schemaName);
     final base = <String, Object?>{
@@ -79,7 +83,12 @@ class AnthropicProvider extends HttpLlmProvider {
       if (systemPrompt != null && systemPrompt.isNotEmpty)
         'system': systemPrompt,
       'messages': [
-        {'role': 'user', 'content': prompt},
+        {
+          'role': 'user',
+          'content': attachments.isEmpty
+              ? prompt
+              : _content(prompt, attachments),
+        },
       ],
     };
     Map<String, Object?> structured() => {
@@ -124,6 +133,35 @@ class AnthropicProvider extends HttpLlmProvider {
     }
     return _parse(response);
   }
+
+  static List<Map<String, Object?>> _content(
+    String prompt,
+    List<LlmAttachment> attachments,
+  ) => [
+    for (final a in attachments.whereType<LlmFileAttachment>()) ...[
+      {'type': 'text', 'text': a.label},
+      if (a.kind == AiInputKind.image)
+        {
+          'type': 'image',
+          'source': {
+            'type': 'base64',
+            'media_type': a.mimeType,
+            'data': base64Encode(a.bytes),
+          },
+        }
+      else
+        {
+          'type': 'document',
+          'source': {
+            'type': 'base64',
+            'media_type': a.mimeType,
+            'data': base64Encode(a.bytes),
+          },
+          'title': a.filename,
+        },
+    ],
+    {'type': 'text', 'text': prompt},
+  ];
 
   static String _toolName(String? schemaName) {
     final cleaned = (schemaName ?? 'output').replaceAll(
