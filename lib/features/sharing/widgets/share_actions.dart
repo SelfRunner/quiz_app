@@ -182,6 +182,8 @@ Future<String?> copySharedToMyAccount(
     ShareResourceType.subject => AppRoutes.subject(copiedId),
     ShareResourceType.note => AppRoutes.note(copiedId),
     ShareResourceType.quiz => AppRoutes.quiz(copiedId),
+    // No deck route yet (Wave 2 UI).
+    ShareResourceType.deck => AppRoutes.subjects,
   };
   messenger?.showSnackBar(
     SnackBar(
@@ -267,6 +269,8 @@ Future<String?> _resourceTitle(
         (await ref.read(noteRepositoryProvider).getById(id))?.title,
       ShareResourceType.quiz =>
         (await ref.read(quizRepositoryProvider).getById(id))?.title,
+      ShareResourceType.deck =>
+        (await ref.read(deckRepositoryProvider).getById(id))?.title,
     };
   } catch (_) {
     return null;
@@ -287,6 +291,8 @@ Future<String?> _parentSubjectTitle(
         (await ref.read(noteRepositoryProvider).getById(id))?.subjectId,
       ShareResourceType.quiz =>
         (await ref.read(quizRepositoryProvider).getById(id))?.subjectId,
+      ShareResourceType.deck =>
+        (await ref.read(deckRepositoryProvider).getById(id))?.subjectId,
     };
     if (subjectId == null) return null;
     return (await ref.read(subjectRepositoryProvider).getById(subjectId))

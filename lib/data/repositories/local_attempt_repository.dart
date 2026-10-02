@@ -34,14 +34,23 @@ class LocalAttemptRepository implements AttemptRepository {
   Future<QuizAttempt> start({
     required String quizId,
     required int total,
+    AttemptMode mode = AttemptMode.practice,
+    int? timeLimitSeconds,
+    List<String>? questionIds,
   }) async {
     final userId = _ctx.requireUserId();
+    if (timeLimitSeconds != null && timeLimitSeconds <= 0) {
+      throw const ValidationException('The time limit must be positive.');
+    }
     final now = _ctx.clock();
     final attempt = QuizAttempt(
       id: _ctx.newId(),
       quizId: quizId,
       ownerId: userId,
       total: total,
+      mode: mode,
+      timeLimitSeconds: timeLimitSeconds,
+      questionIds: questionIds,
       startedAt: now,
       createdAt: now,
       updatedAt: now,

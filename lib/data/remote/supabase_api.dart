@@ -16,4 +16,11 @@ abstract final class SupabaseRpc {
   /// `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid,
   ///   p_target_note_id uuid default null) returns uuid`.
   static const String copyQuiz = 'copy_quiz';
+
+  /// `copy_deck(p_deck_id uuid, p_target_subject_id uuid,
+  ///   p_target_note_id uuid default null) returns uuid` (Wave 2).
+  static const String copyDeck = 'copy_deck';
+
+  /// `can_read_deck(p_deck_id uuid) returns boolean` (Wave 2).
+  static const String canReadDeck = 'can_read_deck';
 }

@@ -99,43 +99,7 @@ class LocalTable<T extends Syncable> {
   Stream<R> _watch<R>(
     R Function() query, {
     required bool Function(R a, R b) equals,
-  }) {
-    late final StreamController<R> controller;
-    StreamSubscription<BoxEvent>? sub;
-    Timer? pending;
-    var hasLast = false;
-    late R last;
-
-    void emit() {
-      pending = null;
-      if (controller.isClosed) return;
-      final R next;
-      try {
-        next = query();
-      } catch (e, st) {
-        controller.addError(e, st);
-        return;
-      }
-      if (hasLast && equals(last, next)) return;
-      hasLast = true;
-      last = next;
-      controller.add(next);
-    }
-
-    controller = StreamController<R>(
-      onListen: () {
-        emit();
-        sub = box.watch().listen((_) {
-          pending ??= Timer(Duration.zero, emit);
-        });
-      },
-      onCancel: () async {
-        pending?.cancel();
-        await sub?.cancel();
-      },
-    );
-    return controller.stream;
-  }
+  }) => watchQuery([box], query, equals: equals);
 
   T? _decodeRaw(String id, String raw) {
     final memo = _memo[id];
@@ -151,4 +115,56 @@ class LocalTable<T extends Syncable> {
       return null;
     }
   }
+}
+
+/// Emits `query()` on listen and whenever any of [boxes] changes (bursts of
+/// changes are coalesced into one evaluation; results equal to the previous
+/// one per [equals] are not re-emitted). Errors thrown by [query] are
+/// forwarded to the stream. Used for queries joining several tables.
+Stream<R> watchQuery<R>(
+  List<BoxBase<Object?>> boxes,
+  R Function() query, {
+  required bool Function(R a, R b) equals,
+}) {
+  late final StreamController<R> controller;
+  final subs = <StreamSubscription<BoxEvent>>[];
+  Timer? pending;
+  var hasLast = false;
+  late R last;
+
+  void emit() {
+    pending = null;
+    if (controller.isClosed) return;
+    final R next;
+    try {
+      next = query();
+    } catch (e, st) {
+      controller.addError(e, st);
+      return;
+    }
+    if (hasLast && equals(last, next)) return;
+    hasLast = true;
+    last = next;
+    controller.add(next);
+  }
+
+  controller = StreamController<R>(
+    onListen: () {
+      emit();
+      for (final box in boxes) {
+        subs.add(
+          box.watch().listen((_) {
+            pending ??= Timer(Duration.zero, emit);
+          }),
+        );
+      }
+    },
+    onCancel: () async {
+      pending?.cancel();
+      for (final sub in subs) {
+        await sub.cancel();
+      }
+    },
+  );
+  return controller.stream;
 }

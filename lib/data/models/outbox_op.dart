@@ -68,6 +68,9 @@ abstract final class SyncTables {
   static const String shares = 'shares';
   static const String profiles = 'profiles';
   static const String attachments = 'attachments';
+  static const String decks = 'decks';
+  static const String cardReviews = 'card_reviews';
+  static const String mistakes = 'mistakes';
 
   /// Storage bucket for note images.
   static const String noteImagesBucket = 'note-images';
@@ -82,5 +85,11 @@ abstract final class SyncTables {
     quizzes,
     quizAttempts,
     attachments,
+    decks,
+    cardReviews,
+    mistakes,
   ];
+
+  /// Private per-user tables (never shared; ids derived with uuid v5).
+  static const Set<String> privateStudy = {cardReviews, mistakes};
 }

@@ -3,7 +3,10 @@ library;
 
 export 'app_user.dart';
 export 'attachment.dart';
+export 'card_review.dart';
+export 'deck.dart';
 export 'drafts.dart';
+export 'mistake.dart';
 export 'note.dart';
 export 'note_image_ref.dart';
 export 'outbox_op.dart';

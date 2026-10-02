@@ -143,9 +143,9 @@ final RegExp _noteImagePattern = RegExp(
 
 /// Soft-delete cascades (tombstones are upserted through the outbox).
 ///
-/// - subject -> its notes (and their quizzes/images), its quizzes and its
-///   attachments (and their blobs)
-/// - note -> quizzes attached to it, images owned by the user in it
+/// - subject -> its notes (and their quizzes/decks/images), its quizzes, its
+///   decks and its attachments (and their blobs)
+/// - note -> quizzes and decks attached to it, images owned by the user in it
 class CascadeDeleter {
   CascadeDeleter(this.ctx);
 
@@ -159,6 +159,9 @@ class CascadeDeleter {
     }
     for (final quiz in _db.quizzes.where((q) => q.subjectId == subject.id)) {
       if (quiz.isOwnedBy(userId)) await deleteQuiz(quiz, now: now);
+    }
+    for (final deck in _db.decks.where((d) => d.subjectId == subject.id)) {
+      if (deck.isOwnedBy(userId)) await deleteDeck(deck, now: now);
     }
     for (final file in _db.attachments.where(
       (a) => a.subjectId == subject.id,
@@ -176,6 +179,9 @@ class CascadeDeleter {
     for (final quiz in _db.quizzes.where((q) => q.noteId == note.id)) {
       if (quiz.isOwnedBy(userId)) await deleteQuiz(quiz, now: at);
     }
+    for (final deck in _db.decks.where((d) => d.noteId == note.id)) {
+      if (deck.isOwnedBy(userId)) await deleteDeck(deck, now: at);
+    }
     for (final ref in noteImageRefsIn(note.contentMd)) {
       if (ref.ownerId == userId && ref.noteId == note.id) {
         await ctx.queueImageDeletion(ref);
@@ -187,6 +193,13 @@ class CascadeDeleter {
   Future<void> deleteQuiz(Quiz quiz, {DateTime? now}) async {
     final at = now ?? ctx.clock();
     await ctx.save(_db.quizzes, quiz.copyWith(deletedAt: at, updatedAt: at));
+  }
+
+  /// Soft-deletes a deck. The user's `card_reviews` for it stay (hidden
+  /// while the deck is not live), as on the server.
+  Future<void> deleteDeck(Deck deck, {DateTime? now}) async {
+    final at = now ?? ctx.clock();
+    await ctx.save(_db.decks, deck.copyWith(deletedAt: at, updatedAt: at));
   }
 }
 

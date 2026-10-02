@@ -472,12 +472,29 @@ class DefaultSyncEngine implements SyncEngine {
           await _pushOp(op, gen);
           progressed = true;
         } on RemoteException catch (e) {
+          if (e.kind == RemoteErrorKind.conflict && _isPrivateStudyUpsert(op)) {
+            // Same (deck, card) / (quiz, question) row exists under another
+            // id: re-keyed locally, pushed again in the next pass.
+            final adopted = await _adoptExistingKey(op, gen);
+            if (adopted != null) {
+              deferred.add(adopted);
+              progressed = true;
+              continue;
+            }
+          }
           switch (e.kind) {
             case RemoteErrorKind.network:
             case RemoteErrorKind.auth:
               rethrow;
             case RemoteErrorKind.dependency:
               deferred.add(op);
+            case RemoteErrorKind.permanent
+                when _isPrivateStudyUpsert(op) && e.code == '42501':
+              // Deck/quiz no longer readable (share revoked, deleted): the
+              // review/mistake can't be saved. Drop it quietly.
+              _checkActive(gen);
+              await db.outbox.drop(op.id);
+              progressed = true;
             case RemoteErrorKind.permanent:
             case RemoteErrorKind.conflict:
               await _reject(op, e, gen, problems);
@@ -582,6 +599,60 @@ class DefaultSyncEngine implements SyncEngine {
     await db.outbox.complete(op);
   }
 
+  static bool _isPrivateStudyUpsert(OutboxOp op) =>
+      op.op == OutboxOpType.upsert &&
+      SyncTables.privateStudy.contains(op.table) &&
+      op.payload != null;
+
+  /// Handles a unique-key violation (`23505`) of a `card_reviews` /
+  /// `mistakes` upsert: another row already holds the natural key (e.g.
+  /// created by a client that did not derive the id). Adopts the server
+  /// row's id, re-applies the local change on top of it and queues it.
+  /// Returns the new op, or null when no such row is visible (the op is
+  /// then rejected).
+  Future<OutboxOp?> _adoptExistingKey(OutboxOp op, int gen) async {
+    final payload = op.payload!;
+    final (parentColumn, keyColumn) = op.table == SyncTables.cardReviews
+        ? ('deck_id', 'card_id')
+        : ('quiz_id', 'question_id');
+    final parentId = payload[parentColumn];
+    final key = payload[keyColumn];
+    if (parentId is! String || key is! String) return null;
+    final rows = await remote.fetchWhere(op.table, parentColumn, parentId);
+    _checkActive(gen);
+    final existing = rows
+        .where(
+          (r) =>
+              r[keyColumn] == key &&
+              r['owner_id'] == payload['owner_id'] &&
+              r['id'] != op.rowId,
+        )
+        .firstOrNull;
+    final existingId = existing?['id'];
+    if (existingId is! String) return null;
+    final table = db.table(op.table);
+    final next = {
+      ...payload,
+      'id': existingId,
+      'created_at': existing!['created_at'] ?? payload['created_at'],
+    };
+    final Syncable row;
+    try {
+      row = table.decode(next);
+    } catch (_) {
+      return null;
+    }
+    await db.outbox.drop(op.id);
+    await table.remove(op.rowId);
+    final adopted = await db.outbox.enqueueUpsert(
+      op.table,
+      existingId,
+      row.toJson(),
+    );
+    await table.box.put(existingId, LocalTable.encode(row));
+    return adopted;
+  }
+
   /// An attachment row is pushed only after its blob upload (queued before
   /// it) has completed, so recipients rarely see a row without a blob.
   void _ensureAttachmentUploaded(Map<String, dynamic> payload) {
@@ -619,6 +690,9 @@ class DefaultSyncEngine implements SyncEngine {
         SyncTables.quizzes => 'a quiz',
         SyncTables.quizAttempts => 'a quiz attempt',
         SyncTables.attachments => 'a file',
+        SyncTables.decks => 'a flashcard deck',
+        SyncTables.cardReviews => 'a flashcard review',
+        SyncTables.mistakes => 'a mistake',
         _ => 'an item',
       },
     };
@@ -834,11 +908,15 @@ class DefaultSyncEngine implements SyncEngine {
         await where(db.notes, 'subject_id');
         await where(db.quizzes, 'subject_id');
         await where(db.attachments, 'subject_id');
+        await where(db.decks, 'subject_id');
       case ShareResourceType.note:
         await byId(db.notes);
         await where(db.quizzes, 'note_id');
+        await where(db.decks, 'note_id');
       case ShareResourceType.quiz:
         await byId(db.quizzes);
+      case ShareResourceType.deck:
+        await byId(db.decks);
     }
   }
 
@@ -847,7 +925,13 @@ class DefaultSyncEngine implements SyncEngine {
   /// tombstone hidden by RLS). Public for tests and manual refresh.
   Future<void> reconcileForeignRows({required String userId, int? gen}) async {
     final g = gen ?? _generation;
-    for (final table in [db.subjects, db.notes, db.quizzes, db.attachments]) {
+    for (final table in [
+      db.subjects,
+      db.notes,
+      db.quizzes,
+      db.attachments,
+      db.decks,
+    ]) {
       final foreign = [
         for (final row in table.all())
           if (!row.isOwnedBy(userId)) row,
@@ -879,7 +963,39 @@ class DefaultSyncEngine implements SyncEngine {
         ]);
       }
     }
+    await _purgeOrphanStudyRows(g);
     await db.meta.setLastReconciledAt(_clock());
+  }
+
+  /// Own `card_reviews` / `mistakes` whose deck / quiz is not cached are
+  /// kept (hidden) while the server still has them (access revoked: the
+  /// server keeps them), and purged when the server no longer returns them
+  /// (parent hard-deleted: rows cascaded without tombstones).
+  Future<void> _purgeOrphanStudyRows(int gen) async {
+    Future<void> purge<T extends Syncable>(
+      LocalTable<T> table,
+      bool Function(T row) orphan,
+    ) async {
+      final candidates = [
+        for (final row in table.all())
+          if (orphan(row) && !db.outbox.hasPendingFor(table.name, row.id))
+            row.id,
+      ];
+      for (var i = 0; i < candidates.length; i += _idChunk) {
+        final chunk = candidates.sublist(
+          i,
+          math.min(i + _idChunk, candidates.length),
+        );
+        _checkActive(gen);
+        final visible = await remote.fetchVisibleIds(table.name, chunk);
+        _checkActive(gen);
+        final gone = chunk.where((id) => !visible.contains(id)).toList();
+        if (gone.isNotEmpty) await table.removeAll(gone);
+      }
+    }
+
+    await purge<CardReview>(db.reviews, (r) => db.decks.raw(r.deckId) == null);
+    await purge<Mistake>(db.mistakes, (m) => db.quizzes.raw(m.quizId) == null);
   }
 
   // -------------------------------------------------------------------------

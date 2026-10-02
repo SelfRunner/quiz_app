@@ -1,8 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive_ce/hive_ce.dart';
 
 import '../core/providers.dart';
+import '../study/due_queue.dart';
+import '../study/study_settings.dart';
+import 'local/hive_boxes.dart';
 import 'local/local_database.dart';
 import 'models/models.dart';
 import 'remote/remote_data_source.dart';
@@ -10,18 +14,25 @@ import 'remote/supabase_remote_data_source.dart';
 import 'repositories/attachment_repository.dart';
 import 'repositories/attempt_repository.dart';
 import 'repositories/auth_repository.dart';
+import 'repositories/deck_repository.dart';
 import 'repositories/image_store.dart';
 import 'repositories/local_attachment_repository.dart';
 import 'repositories/local_attempt_repository.dart';
+import 'repositories/local_deck_repository.dart';
 import 'repositories/local_image_store.dart';
+import 'repositories/local_mistake_repository.dart';
 import 'repositories/local_note_repository.dart';
 import 'repositories/local_quiz_repository.dart';
+import 'repositories/local_review_repository.dart';
 import 'repositories/local_subject_repository.dart';
+import 'repositories/mistake_repository.dart';
 import 'repositories/note_repository.dart';
 import 'repositories/note_search.dart';
 import 'repositories/quiz_repository.dart';
 import 'repositories/repository_support.dart';
+import 'repositories/review_repository.dart';
 import 'repositories/share_repository.dart';
+import 'repositories/study_activity_repository.dart';
 import 'repositories/subject_repository.dart';
 import 'repositories/supabase_auth_repository.dart';
 import 'repositories/supabase_share_repository.dart';
@@ -145,6 +156,65 @@ final attachmentRepositoryProvider = Provider<AttachmentRepository>(
   ),
 );
 
+/// Flashcard decks (own + shared).
+final deckRepositoryProvider = Provider<DeckRepository>(
+  (ref) => LocalDeckRepository(ref.watch(dataContextProvider)),
+);
+
+/// The user's flashcard review state (FSRS), scheduled with the current
+/// [studySettingsProvider].
+final reviewRepositoryProvider = Provider<ReviewRepository>((ref) {
+  final settings = ref.watch(studySettingsProvider);
+  return LocalReviewRepository(
+    ref.watch(dataContextProvider),
+    settings: () => settings,
+  );
+});
+
+/// The user's "Mistakes" set.
+final mistakeRepositoryProvider = Provider<MistakeRepository>(
+  (ref) => LocalMistakeRepository(ref.watch(dataContextProvider)),
+);
+
+/// Source rows of the progress dashboard.
+final studyActivityRepositoryProvider = Provider<StudyActivityRepository>(
+  (ref) => LocalStudyActivityRepository(ref.watch(dataContextProvider)),
+);
+
+/// Flashcard settings (daily new-card limit, desired retention, fuzz),
+/// persisted in the Hive `prefs` box (device-scoped, kept on sign-out).
+/// Falls back to in-memory when the box is not open (tests).
+final studySettingsProvider =
+    NotifierProvider<StudySettingsController, StudySettings>(
+      StudySettingsController.new,
+    );
+
+class StudySettingsController extends Notifier<StudySettings> {
+  static Box<String>? get _prefs => Hive.isBoxOpen(HiveBoxes.prefs)
+      ? Hive.box<String>(HiveBoxes.prefs)
+      : null;
+
+  @override
+  StudySettings build() =>
+      StudySettings.decode(_prefs?.get(StudySettings.prefsKey));
+
+  /// Replaces the settings (values are clamped to valid ranges).
+  void set(StudySettings settings) {
+    state = state.copyWith(
+      newCardsPerDay: settings.newCardsPerDay,
+      desiredRetention: settings.desiredRetention,
+      fuzz: settings.fuzz,
+    );
+    _prefs?.put(StudySettings.prefsKey, state.encode()).ignore();
+  }
+
+  void setNewCardsPerDay(int value) =>
+      set(state.copyWith(newCardsPerDay: value));
+
+  void setDesiredRetention(double value) =>
+      set(state.copyWith(desiredRetention: value));
+}
+
 /// The sync engine, created and started on first read (also by any
 /// repository). Lives for the app's lifetime.
 final Provider<SyncEngine> syncEngineProvider = Provider<SyncEngine>((ref) {
@@ -266,6 +336,62 @@ final attachmentUploadProvider = StreamProvider.autoDispose
       }
       yield* repo.watchUpload(attachment);
     });
+
+// --- Study (Wave 2) ---------------------------------------------------------
+
+/// Decks of a subject (incl. note decks), `updatedAt` desc.
+final decksBySubjectProvider = StreamProvider.autoDispose
+    .family<List<Deck>, String>(
+      (ref, subjectId) =>
+          ref.watch(deckRepositoryProvider).watchBySubject(subjectId),
+    );
+
+/// Decks attached to a note, `updatedAt` desc.
+final decksByNoteProvider = StreamProvider.autoDispose
+    .family<List<Deck>, String>(
+      (ref, noteId) => ref.watch(deckRepositoryProvider).watchByNote(noteId),
+    );
+
+/// Every readable deck (own + shared), `updatedAt` desc.
+final accessibleDecksProvider = StreamProvider.autoDispose<List<Deck>>(
+  (ref) => ref.watch(deckRepositoryProvider).watchAllAccessible(),
+);
+
+final deckProvider = StreamProvider.autoDispose.family<Deck?, String>(
+  (ref, id) => ref.watch(deckRepositoryProvider).watchById(id),
+);
+
+/// Today's flashcard queue across all readable decks ("Due today").
+final dueQueueProvider = StreamProvider.autoDispose<DueQueue>(
+  (ref) => ref.watch(reviewRepositoryProvider).watchDue(),
+);
+
+/// Today's queue of one deck (study session for a deck).
+final deckDueQueueProvider = StreamProvider.autoDispose
+    .family<DueQueue, String>(
+      (ref, deckId) =>
+          ref.watch(reviewRepositoryProvider).watchDue(deckId: deckId),
+    );
+
+/// Number of cards to study today (badge).
+final dueCountProvider = StreamProvider.autoDispose<int>(
+  (ref) => ref.watch(reviewRepositoryProvider).watchDueCount(),
+);
+
+/// Card counts of one deck for the current user.
+final deckStatsProvider = StreamProvider.autoDispose.family<DeckStats, String>(
+  (ref, deckId) => ref.watch(reviewRepositoryProvider).watchDeckStats(deckId),
+);
+
+/// Open mistakes grouped by quiz.
+final openMistakesProvider = StreamProvider.autoDispose<List<MistakeGroup>>(
+  (ref) => ref.watch(mistakeRepositoryProvider).watchOpen(),
+);
+
+/// Number of open mistakes (badge).
+final openMistakeCountProvider = StreamProvider.autoDispose<int>(
+  (ref) => ref.watch(mistakeRepositoryProvider).watchOpenCount(),
+);
 
 /// Shares the current user received. `ref.invalidate` to refresh.
 final sharedWithMeProvider = FutureProvider.autoDispose<List<Share>>(

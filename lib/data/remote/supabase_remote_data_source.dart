@@ -367,6 +367,14 @@ class SupabaseRemoteDataSource
           'p_target_note_id': targetNoteId,
         },
       ),
+      ShareResourceType.deck => (
+        SupabaseRpc.copyDeck,
+        <String, dynamic>{
+          'p_deck_id': resourceId,
+          'p_target_subject_id': targetSubjectId,
+          'p_target_note_id': targetNoteId,
+        },
+      ),
     };
     final result = await _guard<Object?>(
       () => _client.rpc<Object?>(name, params: params),
