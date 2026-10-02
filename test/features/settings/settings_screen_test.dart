@@ -109,6 +109,50 @@ void main() {
     expect(deps.keys.headers[p], {'X-Title': 'Quiz'});
   });
 
+  testWidgets('rejects an http:// base URL to a remote host', (tester) async {
+    final deps = TestDeps();
+    deps.keys.selected = LlmProviderId.openaiCompatible;
+    await _pump(tester, deps);
+
+    await tester.enterText(
+      find.byKey(const Key('ai-base-url')),
+      'http://api.example.com/v1',
+    );
+    await tester.tap(find.byKey(const Key('ai-save')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Use https:// for remote servers'), findsOne);
+    expect(deps.keys.baseUrls, isEmpty);
+  });
+
+  testWidgets('"Remove all saved keys" clears the current user', (
+    tester,
+  ) async {
+    final deps = TestDeps();
+    deps.keys
+      ..selected = LlmProviderId.openai
+      ..keys[LlmProviderId.openai] = 'sk-old'
+      ..keys[LlmProviderId.gemini] = 'g-old';
+    await _pump(tester, deps);
+
+    await tester.ensureVisible(find.byKey(const Key('ai-clear-all')));
+    await tester.tap(find.byKey(const Key('ai-clear-all')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove all'));
+    await tester.pumpAndSettle();
+
+    expect(deps.keys.clearedUsers, [kUserId]);
+    expect(deps.keys.keys, isEmpty);
+    expect(find.text('All saved keys removed'), findsOneWidget);
+    final keyField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const Key('ai-api-key')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(keyField.controller!.text, isEmpty);
+  });
+
   testWidgets('theme mode and manual sync', (tester) async {
     final deps = TestDeps();
     final container = await _pump(tester, deps);

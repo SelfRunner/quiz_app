@@ -5,6 +5,7 @@ import '../data/models/drafts.dart';
 import '../data/models/question.dart';
 import 'ai_service.dart';
 import 'api_key_store.dart';
+import 'base_url_policy.dart';
 import 'draft_validator.dart';
 import 'llm_provider.dart';
 import 'prompts.dart';
@@ -179,10 +180,11 @@ class DefaultAiService implements AiService {
         apiKey: key ?? '',
         model:
             (await _keys.getSelectedModel(provider)) ?? provider.defaultModel,
-        baseUrl:
-            _blankToNull(baseUrl) ??
-            await _keys.getBaseUrl(provider) ??
-            provider.defaultBaseUrl,
+        baseUrl: _checkedBaseUrl(
+          _blankToNull(baseUrl) ??
+              await _keys.getBaseUrl(provider) ??
+              provider.defaultBaseUrl,
+        ),
         extraHeaders: extraHeaders ?? await _keys.getExtraHeaders(provider),
       ),
     );
@@ -230,7 +232,9 @@ class DefaultAiService implements AiService {
         providerId: id,
         apiKey: key,
         model: selection.model,
-        baseUrl: (await _keys.getBaseUrl(id)) ?? id.defaultBaseUrl,
+        baseUrl: _checkedBaseUrl(
+          (await _keys.getBaseUrl(id)) ?? id.defaultBaseUrl,
+        ),
         extraHeaders: id == LlmProviderId.openaiCompatible
             ? await _keys.getExtraHeaders(id)
             : const {},
@@ -334,6 +338,11 @@ class DefaultAiService implements AiService {
       );
     }
   }
+
+  /// Never send a key to a non-https remote URL (unsaved Settings input or
+  /// a value stored before the https rule existed).
+  static String? _checkedBaseUrl(String? url) =>
+      url == null ? null : normalizeBaseUrl(url);
 
   static String? _blankToNull(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v.trim();
