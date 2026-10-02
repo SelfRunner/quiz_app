@@ -237,8 +237,14 @@ class Api {
     headers: {'x-upsert': upsert ? 'true' : 'false'},
   );
 
-  Future<Res> download(String objectPath, String? jwt) =>
-      send('GET', '/storage/v1/object/$_bucket/$objectPath', jwt: jwt);
+  /// The Storage CDN caches authenticated GETs keyed by URL + Authorization
+  /// header and does not invalidate them when RLS access changes (e.g. a share
+  /// is revoked). A unique query string forces an origin (RLS-evaluated) read.
+  Future<Res> download(String objectPath, String? jwt) => send(
+    'GET',
+    '/storage/v1/object/$_bucket/$objectPath?nocache=${_randomString(12)}',
+    jwt: jwt,
+  );
 
   Future<Res> copyObject(String from, String to, String jwt) => send(
     'POST',
