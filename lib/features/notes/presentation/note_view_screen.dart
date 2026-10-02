@@ -1,19 +1,28 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
-import '../../../core/widgets/note_markdown.dart';
+import '../../../core/widgets/error_message.dart';
 import '../../../core/widgets/sync_status_indicator.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
+import '../../../data/repositories/note_repository.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
 import '../../decks/widgets/deck_list_section.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../../subjects/presentation/subject_detail_screen.dart' show MetaChip;
 import '../application/note_actions.dart';
+import '../application/note_ai_tools.dart';
+import '../application/note_document.dart';
+import '../application/note_markdown_syntax.dart';
+import 'widgets/note_ai_tools.dart';
+import 'widgets/note_toc.dart';
+import 'widgets/rich_note_markdown.dart';
 
 /// Rendered note with its quizzes. Owners can edit, share, delete and
 /// generate quizzes from the note; shared notes are read-only.
@@ -39,13 +48,98 @@ class NoteViewScreen extends ConsumerWidget {
   }
 }
 
-class _NoteView extends ConsumerWidget {
+class _NoteView extends ConsumerStatefulWidget {
   const _NoteView({required this.note});
 
   final Note note;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_NoteView> createState() => _NoteViewState();
+}
+
+class _NoteViewState extends ConsumerState<_NoteView> {
+  final _anchors = NoteAnchors();
+  String? _parsedFor;
+  List<NoteHeading> _headings = const [];
+
+  Note get note => widget.note;
+
+  List<NoteHeading> get headings {
+    if (_parsedFor != note.contentMd) {
+      _parsedFor = note.contentMd;
+      _headings = noteHeadings(note.contentMd);
+    }
+    return _headings;
+  }
+
+  NoteRepository get _repo => ref.read(noteRepositoryProvider);
+
+  Future<void> _saveContent(
+    String markdown, {
+    String? message,
+    bool undo = false,
+  }) async {
+    final before = note;
+    try {
+      await _repo.update(note.copyWith(contentMd: markdown));
+      if (!mounted || message == null) return;
+      showAppSnackBar(
+        context,
+        message,
+        action: undo
+            ? SnackBarAction(
+                label: 'Undo',
+                onPressed: () => unawaited(
+                  _saveContent(before.contentMd, message: 'Undone'),
+                ),
+              )
+            : null,
+      );
+    } catch (e) {
+      if (mounted) showErrorSnackBar(context, e, prefix: 'Could not save');
+    }
+  }
+
+  void _toggleTask(int index, bool checked) {
+    final updated = NoteDocument.setTask(
+      note.contentMd,
+      index,
+      checked: checked,
+    );
+    if (updated == null) {
+      showAppSnackBar(
+        context,
+        "This checkbox can't be changed here. Edit the note instead.",
+      );
+      return;
+    }
+    unawaited(_saveContent(updated));
+  }
+
+  NoteAiHost _aiHost(bool isOwner) => NoteAiHost(
+    currentMarkdown: () => note.contentMd,
+    title: note.title,
+    subjectId: isOwner ? note.subjectId : null,
+    onReplace: isOwner
+        ? (markdown) =>
+              _saveContent(markdown, message: 'Note replaced', undo: true)
+        : null,
+    onInsertBelow: isOwner
+        ? (markdown) => _saveContent(
+            appendMarkdown(note.contentMd, markdown),
+            message: 'Inserted below',
+            undo: true,
+          )
+        : null,
+  );
+
+  Future<void> _showTocSheet() async {
+    final heading = await showNoteTocSheet(context, headings);
+    if (heading != null && mounted) unawaited(_anchors.reveal(heading.index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = AppColors.of(context);
     final isOwner = note.isOwnedBy(ref.watch(currentUserIdProvider));
@@ -61,7 +155,16 @@ class _NoteView extends ConsumerWidget {
       ),
     );
 
+    final showToc = noteNeedsToc(headings);
     final actions = <Widget>[
+      if (showToc && !twoPane)
+        IconButton(
+          key: const Key('note-toc-button'),
+          tooltip: 'Contents',
+          icon: const Icon(Icons.toc),
+          onPressed: _showTocSheet,
+        ),
+      NoteAiMenuButton(host: _aiHost(isOwner)),
       if (isOwner) ...[
         AiGate(
           onReady: generateQuiz,
@@ -156,6 +259,12 @@ class _NoteView extends ConsumerWidget {
             label: 'Shared · read-only',
           ),
         Text('Updated ${formatRelativeTime(note.updatedAt)}', style: metaStyle),
+        if (note.contentMd.trim().isNotEmpty)
+          Text(
+            '${NoteDocument.readingMinutes(NoteDocument.wordCount(note.contentMd))} min read',
+            key: const Key('note-reading-time'),
+            style: metaStyle,
+          ),
       ],
     );
 
@@ -172,7 +281,11 @@ class _NoteView extends ConsumerWidget {
                   )
                 : null,
           )
-        : NoteMarkdown(data: note.contentMd);
+        : RichNoteMarkdown(
+            data: note.contentMd,
+            anchors: _anchors,
+            onToggleTask: isOwner ? _toggleTask : null,
+          );
 
     // QuizListSection / DeckListSection bring their own headers and actions.
     final studySections = Column(
@@ -239,7 +352,25 @@ class _NoteView extends ConsumerWidget {
                     width: 360,
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(Insets.lg),
-                      child: studySections,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (showToc) ...[
+                            NoteTableOfContents(
+                              headings: headings,
+                              onSelect: (h) =>
+                                  unawaited(_anchors.reveal(h.index)),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: Insets.lg,
+                              ),
+                              child: Divider(height: 1, color: colors.hairline),
+                            ),
+                          ],
+                          studySections,
+                        ],
+                      ),
                     ),
                   ),
                 ),
