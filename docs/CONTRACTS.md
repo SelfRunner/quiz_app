@@ -700,7 +700,7 @@ three inside `AppShell` ShellRoute with NavigationBar / NavigationRail >= 720px)
 `quizPlay(id)` `/quizzes/:id/play`,
 `generate(kind: AiGenerateKind.quiz|note, subjectId?, noteId?)`
 `/ai/generate?kind=&subjectId=&noteId=`. Redirect: signed out -> `/login`;
-signed in on `/login|/signup` -> `/`. "New note/quiz" flows: create via the
+signed in on `/login|/signup` -> `/home` (also the initial location). "New note/quiz" flows: create via the
 repository, then `push(AppRoutes.noteEdit(id))` / `quizEdit(id)`.
 
 Each route builds a screen class from `lib/features/<feature>/presentation/`

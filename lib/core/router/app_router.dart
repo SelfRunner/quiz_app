@@ -35,7 +35,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(refresh.dispose);
 
   final router = GoRouter(
-    initialLocation: AppRoutes.subjects,
+    initialLocation: AppRoutes.home,
     refreshListenable: refresh,
     redirect: (context, state) {
       final signedIn = auth.currentUser != null;
