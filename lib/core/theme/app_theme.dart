@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive_ce/hive_ce.dart';
+
+import '../../data/local/hive_boxes.dart';
 
 /// Material 3 light/dark themes generated from a single seed color.
 abstract final class AppTheme {
@@ -25,14 +28,25 @@ abstract final class AppTheme {
   }
 }
 
-/// App theme mode. The settings feature may persist and restore it.
+/// App theme mode, persisted in the Hive `prefs` box (device-scoped, kept on
+/// sign-out). Falls back to in-memory when the box is not open (tests).
 final themeModeProvider = NotifierProvider<ThemeModeController, ThemeMode>(
   ThemeModeController.new,
 );
 
 class ThemeModeController extends Notifier<ThemeMode> {
-  @override
-  ThemeMode build() => ThemeMode.system;
+  static const String prefsKey = 'theme_mode';
 
-  void set(ThemeMode mode) => state = mode;
+  static Box<String>? get _prefs => Hive.isBoxOpen(HiveBoxes.prefs)
+      ? Hive.box<String>(HiveBoxes.prefs)
+      : null;
+
+  @override
+  ThemeMode build() =>
+      ThemeMode.values.asNameMap()[_prefs?.get(prefsKey)] ?? ThemeMode.system;
+
+  void set(ThemeMode mode) {
+    state = mode;
+    _prefs?.put(prefsKey, mode.name).ignore();
+  }
 }
