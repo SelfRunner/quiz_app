@@ -5,6 +5,11 @@ abstract interface class NoteRepository {
   /// Notes in [subjectId] (own or shared), sorted by `updatedAt` desc.
   Stream<List<Note>> watchBySubject(String subjectId);
 
+  /// Every live note the user can read: own notes and notes shared with
+  /// them (directly or through a shared subject), `updatedAt` desc. For the
+  /// note picker; filter with `searchNotes` (note_search.dart).
+  Stream<List<Note>> watchAllAccessible();
+
   Stream<Note?> watchById(String id);
 
   Future<Note?> getById(String id);

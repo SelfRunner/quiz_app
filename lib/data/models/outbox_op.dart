@@ -21,6 +21,19 @@ enum OutboxOpType {
   /// Remove an image from Storage. `rowId` is the storage path.
   @JsonValue('delete_image')
   deleteImage,
+
+  /// Upload a locally saved attachment blob. `table` is
+  /// `SyncTables.attachmentsBucket`, `rowId` the storage path, payload
+  /// `{attachment_id, content_type}`. Queued before the row upsert; the row
+  /// is not pushed while its upload is pending.
+  @JsonValue('upload_attachment')
+  uploadAttachment,
+
+  /// Remove an attachment blob from Storage (`rowId` = storage path,
+  /// payload `{attachment_id}`). Queued after the tombstone upsert; not run
+  /// while that upsert is pending.
+  @JsonValue('delete_attachment')
+  deleteAttachment,
 }
 
 /// A pending local write waiting to be pushed to Supabase, processed FIFO by
@@ -54,10 +67,20 @@ abstract final class SyncTables {
   static const String quizAttempts = 'quiz_attempts';
   static const String shares = 'shares';
   static const String profiles = 'profiles';
+  static const String attachments = 'attachments';
 
   /// Storage bucket for note images.
   static const String noteImagesBucket = 'note-images';
 
+  /// Storage bucket for subject attachments (same name as the table).
+  static const String attachmentsBucket = 'attachments';
+
   /// Tables pulled by the sync engine, in dependency order.
-  static const List<String> synced = [subjects, notes, quizzes, quizAttempts];
+  static const List<String> synced = [
+    subjects,
+    notes,
+    quizzes,
+    quizAttempts,
+    attachments,
+  ];
 }

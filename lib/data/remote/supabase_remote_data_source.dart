@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
 import '../local/sync_meta_store.dart';
+import '../models/attachment.dart';
 import '../models/outbox_op.dart';
 import '../models/share.dart';
 import 'remote_data_source.dart';
@@ -31,8 +33,22 @@ class SupabaseRemoteDataSource
   final sb.SupabaseClient _client;
   final Duration timeout;
 
-  sb.StorageFileApi get _bucket =>
-      _client.storage.from(SyncTables.noteImagesBucket);
+  sb.StorageFileApi _storage(String bucket) => _client.storage.from(bucket);
+
+  final math.Random _random = math.Random.secure();
+
+  /// Unique value for the download `cacheNonce` query parameter.
+  String cacheNonce() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    return String.fromCharCodes(
+      List.generate(16, (_) => chars.codeUnitAt(_random.nextInt(chars.length))),
+    );
+  }
+
+  /// Large blobs get more time than the default request timeout (assumes
+  /// at least ~100 KB/s).
+  Duration _transferTimeout(int bytes) =>
+      Duration(seconds: timeout.inSeconds + bytes ~/ (100 * 1024));
 
   // -------------------------------------------------------------------------
   // Sync
@@ -134,42 +150,65 @@ class SupabaseRemoteDataSource
     String path,
     Uint8List bytes, {
     String? contentType,
+    String bucket = SyncTables.noteImagesBucket,
   }) => _guard(
-    () => _bucket.uploadBinary(
+    () => _storage(bucket).uploadBinary(
       path,
       bytes,
       fileOptions: sb.FileOptions(upsert: true, contentType: contentType),
     ),
+    timeout: _transferTimeout(bytes.length),
+  );
+
+  /// Downloads with a unique `cacheNonce` query parameter: the Storage CDN
+  /// caches authenticated GETs keyed by URL + Authorization and does not
+  /// invalidate them when RLS access changes (e.g. a revoked share), so a
+  /// fresh URL forces an origin (RLS-evaluated) read every time.
+  @override
+  Future<Uint8List> downloadImage(
+    String path, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) => _guard(
+    () => _storage(bucket).download(path, cacheNonce: cacheNonce()),
+    timeout: bucket == SyncTables.attachmentsBucket
+        ? _transferTimeout(Attachment.maxSizeBytes)
+        : null,
   );
 
   @override
-  Future<Uint8List> downloadImage(String path) =>
-      _guard(() => _bucket.download(path));
+  Future<String> createSignedUrl(
+    String path,
+    Duration expiresIn, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) =>
+      _guard(() => _storage(bucket).createSignedUrl(path, expiresIn.inSeconds));
 
   @override
-  Future<String> createSignedUrl(String path, Duration expiresIn) =>
-      _guard(() => _bucket.createSignedUrl(path, expiresIn.inSeconds));
+  Future<void> removeImages(
+    List<String> paths, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) => _guard(() => _storage(bucket).remove(paths));
 
   @override
-  Future<void> removeImages(List<String> paths) =>
-      _guard(() => _bucket.remove(paths));
-
-  @override
-  Future<void> copyImage(String fromPath, String toPath) =>
-      _guard(() => _bucket.copy(fromPath, toPath));
+  Future<void> copyImage(
+    String fromPath,
+    String toPath, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) => _guard(() => _storage(bucket).copy(fromPath, toPath));
 
   @override
   Future<List<NoteImageCopy>> pendingImageCopies() async {
     final rows = await _guard(
       () => _client
           .from(_noteImageCopies)
-          .select('id, from_path, to_path')
+          .select('id, bucket, from_path, to_path')
           .order('created_at', ascending: true),
     );
     return [
       for (final r in rows)
         (
           id: r['id'] as String,
+          bucket: (r['bucket'] as String?) ?? SyncTables.noteImagesBucket,
           fromPath: r['from_path'] as String,
           toPath: r['to_path'] as String,
         ),
@@ -367,9 +406,9 @@ class SupabaseRemoteDataSource
 
   static String _quote(String value) => '"$value"';
 
-  Future<T> _guard<T>(Future<T> Function() body) async {
+  Future<T> _guard<T>(Future<T> Function() body, {Duration? timeout}) async {
     try {
-      return await body().timeout(timeout);
+      return await body().timeout(timeout ?? this.timeout);
     } catch (e) {
       throw mapRemoteError(e);
     }

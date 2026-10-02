@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../local/sync_meta_store.dart';
+import '../models/outbox_op.dart';
 import '../models/share.dart';
 
 /// How a remote failure should be handled by sync / repositories.
@@ -82,18 +83,50 @@ abstract interface class SyncRemoteDataSource {
 }
 
 /// A pending Storage copy queued by the `copy_*` RPCs in
-/// `public.note_image_copies` (owner = caller).
-typedef NoteImageCopy = ({String id, String fromPath, String toPath});
+/// `public.note_image_copies` (owner = caller). [bucket] is `note-images`
+/// (note images, the column default) or `attachments` (`copy_subject`).
+typedef NoteImageCopy = ({
+  String id,
+  String bucket,
+  String fromPath,
+  String toPath,
+});
 
-/// `note-images` Storage access. Implementations throw [RemoteException].
+/// Storage access for the private buckets (`note-images` by default,
+/// `attachments` via [bucket]). Implementations throw [RemoteException].
 abstract interface class ImageRemoteDataSource {
-  Future<void> uploadImage(String path, Uint8List bytes, {String? contentType});
-  Future<Uint8List> downloadImage(String path);
-  Future<String> createSignedUrl(String path, Duration expiresIn);
-  Future<void> removeImages(List<String> paths);
+  Future<void> uploadImage(
+    String path,
+    Uint8List bytes, {
+    String? contentType,
+    String bucket = SyncTables.noteImagesBucket,
+  });
 
-  /// Server-side copy within the bucket.
-  Future<void> copyImage(String fromPath, String toPath);
+  /// Downloads an object. Implementations must defeat CDN caching (unique
+  /// query parameter per request): the Storage CDN caches authenticated
+  /// downloads by URL + token and would keep serving revoked users.
+  Future<Uint8List> downloadImage(
+    String path, {
+    String bucket = SyncTables.noteImagesBucket,
+  });
+
+  Future<String> createSignedUrl(
+    String path,
+    Duration expiresIn, {
+    String bucket = SyncTables.noteImagesBucket,
+  });
+
+  Future<void> removeImages(
+    List<String> paths, {
+    String bucket = SyncTables.noteImagesBucket,
+  });
+
+  /// Server-side copy within [bucket].
+  Future<void> copyImage(
+    String fromPath,
+    String toPath, {
+    String bucket = SyncTables.noteImagesBucket,
+  });
 
   /// The caller's rows of `note_image_copies`, oldest first.
   Future<List<NoteImageCopy>> pendingImageCopies();

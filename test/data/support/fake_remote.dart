@@ -21,7 +21,26 @@ class FakeRemote
     for (final t in SyncTables.synced) t: {},
   };
   final List<Map<String, dynamic>> shares = [];
+
+  /// Objects of bucket `note-images`.
   final Map<String, Uint8List> objects = {};
+
+  /// Objects of bucket `attachments`.
+  final Map<String, Uint8List> attachmentObjects = {};
+
+  /// Ordered log of remote writes: `upsert:{table}:{id}`,
+  /// `upload:{bucket}:{path}`, `remove:{bucket}:{path}`,
+  /// `copy:{bucket}:{from}->{to}`, `download:{bucket}:{path}`.
+  final List<String> log = [];
+
+  /// Return an exception to fail a Storage upload of (bucket, path).
+  RemoteException? Function(String bucket, String path)? uploadHook;
+
+  Map<String, Uint8List> bucket(String name) => switch (name) {
+    SyncTables.noteImagesBucket => objects,
+    SyncTables.attachmentsBucket => attachmentObjects,
+    _ => throw ArgumentError.value(name, 'bucket'),
+  };
   final List<Map<String, dynamic>> imageCopies = [];
   final Map<String, Map<String, dynamic>> profiles = {};
 
@@ -89,6 +108,12 @@ class FakeRemote
         _shared(ShareResourceType.quiz, row['id'] as String) ||
             _shared(ShareResourceType.subject, row['subject_id'] as String?) ||
             _shared(ShareResourceType.note, row['note_id'] as String?),
+      // Only through a subject share, while row and subject are live.
+      SyncTables.attachments =>
+        row['deleted_at'] == null &&
+            tables[SyncTables.subjects]![row['subject_id']]?['deleted_at'] ==
+                null &&
+            _shared(ShareResourceType.subject, row['subject_id'] as String?),
       _ => false,
     };
   }
@@ -120,7 +145,9 @@ class FakeRemote
     }
     String? parentTable;
     String? parentId;
-    if (table == SyncTables.notes || table == SyncTables.quizzes) {
+    if (table == SyncTables.notes ||
+        table == SyncTables.quizzes ||
+        table == SyncTables.attachments) {
       parentTable = SyncTables.subjects;
       parentId = row['subject_id'] as String?;
     } else if (table == SyncTables.quizAttempts) {
@@ -134,6 +161,7 @@ class FakeRemote
         code: '23503',
       );
     }
+    log.add('upsert:$table:$id');
     return _copy(serverWrite(table, row));
   }
 
@@ -215,8 +243,11 @@ class FakeRemote
     String path,
     Uint8List bytes, {
     String? contentType,
+    String bucket = SyncTables.noteImagesBucket,
   }) async {
     _checkOnline();
+    final hooked = uploadHook?.call(bucket, path);
+    if (hooked != null) throw hooked;
     if (!path.startsWith('$userId/')) {
       throw const RemoteException(
         RemoteErrorKind.permanent,
@@ -224,14 +255,19 @@ class FakeRemote
         code: '403',
       );
     }
-    objects[path] = bytes;
+    log.add('upload:$bucket:$path');
+    this.bucket(bucket)[path] = bytes;
   }
 
   @override
-  Future<Uint8List> downloadImage(String path) async {
+  Future<Uint8List> downloadImage(
+    String path, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) async {
     _checkOnline();
-    final bytes = objects[path];
-    if (bytes == null) {
+    log.add('download:$bucket:$path');
+    final bytes = this.bucket(bucket)[path];
+    if (bytes == null || !_canReadObject(bucket, path)) {
       throw const RemoteException(
         RemoteErrorKind.permanent,
         'Object not found',
@@ -241,21 +277,45 @@ class FakeRemote
     return bytes;
   }
 
-  @override
-  Future<String> createSignedUrl(String path, Duration expiresIn) async {
-    _checkOnline();
-    return 'https://example.test/$path?token=${expiresIn.inSeconds}';
+  /// Storage read policy (attachments: own folder or a readable row).
+  bool _canReadObject(String bucket, String path) {
+    if (bucket != SyncTables.attachmentsBucket) return true;
+    if (path.startsWith('$userId/')) return true;
+    return tables[SyncTables.attachments]!.values.any(
+      (r) => r['storage_path'] == path && visible(SyncTables.attachments, r),
+    );
   }
 
   @override
-  Future<void> removeImages(List<String> paths) async {
+  Future<String> createSignedUrl(
+    String path,
+    Duration expiresIn, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) async {
     _checkOnline();
-    paths.forEach(objects.remove);
+    return 'https://example.test/$bucket/$path?token=${expiresIn.inSeconds}';
   }
 
   @override
-  Future<void> copyImage(String fromPath, String toPath) async {
+  Future<void> removeImages(
+    List<String> paths, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) async {
     _checkOnline();
+    for (final path in paths) {
+      log.add('remove:$bucket:$path');
+      this.bucket(bucket).remove(path);
+    }
+  }
+
+  @override
+  Future<void> copyImage(
+    String fromPath,
+    String toPath, {
+    String bucket = SyncTables.noteImagesBucket,
+  }) async {
+    _checkOnline();
+    final objects = this.bucket(bucket);
     final bytes = objects[fromPath];
     if (bytes == null) {
       throw const RemoteException(
@@ -264,6 +324,7 @@ class FakeRemote
         code: '404',
       );
     }
+    log.add('copy:$bucket:$fromPath->$toPath');
     objects[toPath] = bytes;
   }
 
@@ -275,6 +336,7 @@ class FakeRemote
         if (c['owner_id'] == userId)
           (
             id: c['id'] as String,
+            bucket: (c['bucket'] as String?) ?? SyncTables.noteImagesBucket,
             fromPath: c['from_path'] as String,
             toPath: c['to_path'] as String,
           ),
@@ -538,4 +600,26 @@ Map<String, dynamic> quizRow(
   'created_at': '2026-01-01T00:00:00Z',
   'updated_at': '2026-01-01T00:00:00Z',
   'deleted_at': null,
+};
+
+Map<String, dynamic> attachmentRow(
+  String id,
+  String owner,
+  String subjectId, {
+  String name = 'file.pdf',
+  String kind = 'pdf',
+  String? deletedAt,
+}) => {
+  'id': id,
+  'subject_id': subjectId,
+  'owner_id': owner,
+  'name': name,
+  'mime_type': 'application/pdf',
+  'size_bytes': 3,
+  'kind': kind,
+  'storage_path': '$owner/$subjectId/$id/$name',
+  'extracted_text': null,
+  'created_at': '2026-01-01T00:00:00Z',
+  'updated_at': '2026-01-01T00:00:00Z',
+  'deleted_at': deletedAt,
 };

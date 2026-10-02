@@ -46,9 +46,13 @@ class TestHive {
     notesBox: await Hive.openBox<String>('notes'),
     quizzesBox: await Hive.openBox<String>('quizzes'),
     attemptsBox: await Hive.openBox<String>('quiz_attempts'),
+    attachmentsBox: await Hive.openBox<String>('attachments'),
     outboxBox: await Hive.openBox<String>('outbox'),
     syncMetaBox: await Hive.openBox<String>('sync_meta'),
     images: HiveImageCache(await Hive.openBox<Uint8List>('note_image_bytes')),
+    attachmentFiles: LazyHiveBlobCache(
+      await Hive.openLazyBox<Uint8List>('attachment_bytes'),
+    ),
     clock: clock.call,
     newId: ids.call,
   );

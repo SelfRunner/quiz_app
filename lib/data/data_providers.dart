@@ -7,15 +7,18 @@ import 'local/local_database.dart';
 import 'models/models.dart';
 import 'remote/remote_data_source.dart';
 import 'remote/supabase_remote_data_source.dart';
+import 'repositories/attachment_repository.dart';
 import 'repositories/attempt_repository.dart';
 import 'repositories/auth_repository.dart';
 import 'repositories/image_store.dart';
+import 'repositories/local_attachment_repository.dart';
 import 'repositories/local_attempt_repository.dart';
 import 'repositories/local_image_store.dart';
 import 'repositories/local_note_repository.dart';
 import 'repositories/local_quiz_repository.dart';
 import 'repositories/local_subject_repository.dart';
 import 'repositories/note_repository.dart';
+import 'repositories/note_search.dart';
 import 'repositories/quiz_repository.dart';
 import 'repositories/repository_support.dart';
 import 'repositories/share_repository.dart';
@@ -116,6 +119,7 @@ final shareRepositoryProvider = Provider<ShareRepository>((ref) {
       : NoteImageCopyProcessor(
           ref.watch(imageRemoteDataSourceProvider),
           ref.watch(localDatabaseProvider).images,
+          attachmentCache: ref.watch(localDatabaseProvider).attachmentFiles,
         );
   return SupabaseShareRepository(
     ctx: ref.watch(dataContextProvider),
@@ -128,6 +132,14 @@ final shareRepositoryProvider = Provider<ShareRepository>((ref) {
 
 final imageStoreProvider = Provider<ImageStore>(
   (ref) => LocalImageStore(
+    ref.watch(dataContextProvider),
+    ref.watch(imageRemoteDataSourceProvider),
+  ),
+);
+
+/// Subject attachments ("Files" library).
+final attachmentRepositoryProvider = Provider<AttachmentRepository>(
+  (ref) => LocalAttachmentRepository(
     ref.watch(dataContextProvider),
     ref.watch(imageRemoteDataSourceProvider),
   ),
@@ -208,6 +220,52 @@ final attemptsByQuizProvider = StreamProvider.autoDispose
     .family<List<QuizAttempt>, String>(
       (ref, quizId) => ref.watch(attemptRepositoryProvider).watchByQuiz(quizId),
     );
+
+/// Every note the user can read (own + shared), `updatedAt` desc. For the
+/// note picker.
+final accessibleNotesProvider = StreamProvider.autoDispose<List<Note>>(
+  (ref) => ref.watch(noteRepositoryProvider).watchAllAccessible(),
+);
+
+/// [accessibleNotesProvider] filtered by a search query (title + content,
+/// case-insensitive, all whitespace-separated terms; title hits first).
+final noteSearchProvider = Provider.autoDispose
+    .family<AsyncValue<List<Note>>, String>(
+      (ref, query) => ref
+          .watch(accessibleNotesProvider)
+          .whenData((notes) => searchNotes(notes, query)),
+    );
+
+/// Live attachments of a subject (own or shared), newest first.
+final attachmentsForSubjectProvider = StreamProvider.autoDispose
+    .family<List<Attachment>, String>(
+      (ref, subjectId) =>
+          ref.watch(attachmentRepositoryProvider).watchBySubject(subjectId),
+    );
+
+/// Every attachment the user can read (own + shared subjects), newest first.
+final accessibleAttachmentsProvider =
+    StreamProvider.autoDispose<List<Attachment>>(
+      (ref) => ref.watch(attachmentRepositoryProvider).watchAllAccessible(),
+    );
+
+final attachmentProvider = StreamProvider.autoDispose
+    .family<Attachment?, String>(
+      (ref, id) => ref.watch(attachmentRepositoryProvider).watchById(id),
+    );
+
+/// Upload state of an attachment's blob by attachment id (queued /
+/// uploading / retrying / done; `done` for unknown ids).
+final attachmentUploadProvider = StreamProvider.autoDispose
+    .family<AttachmentUploadState, String>((ref, id) async* {
+      final repo = ref.watch(attachmentRepositoryProvider);
+      final attachment = await repo.getById(id);
+      if (attachment == null) {
+        yield AttachmentUploadState.done;
+        return;
+      }
+      yield* repo.watchUpload(attachment);
+    });
 
 /// Shares the current user received. `ref.invalidate` to refresh.
 final sharedWithMeProvider = FutureProvider.autoDispose<List<Share>>(

@@ -244,6 +244,9 @@ class FakeNoteRepository implements NoteRepository {
       Stream.value(notes.where((n) => n.subjectId == subjectId).toList());
 
   @override
+  Stream<List<Note>> watchAllAccessible() => Stream.value(notes.toList());
+
+  @override
   Stream<Note?> watchById(String id) => Stream.value(_find(id));
 
   @override

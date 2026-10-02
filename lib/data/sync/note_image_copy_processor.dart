@@ -1,22 +1,33 @@
 import '../local/image_cache.dart';
+import '../models/outbox_op.dart';
 import '../remote/remote_data_source.dart';
 
 /// Completes the Storage half of `copy_note` / `copy_subject`.
 ///
 /// The RPCs copy rows, rewrite `note-image://{src_owner}/{src_note}/{file}`
 /// in `content_md` to `note-image://{me}/{new_note}/{file}` and queue one
-/// `public.note_image_copies(from_path, to_path)` row per file. This
-/// processor copies each object in Storage and deletes the row:
+/// `public.note_image_copies(bucket, from_path, to_path)` row per file
+/// (`bucket` = `note-images` for note images, `attachments` for the files of
+/// a copied subject). This processor copies each object within its bucket
+/// (`storage.from(bucket).copy(from, to)`), copies locally cached bytes to
+/// the new path, and deletes the row:
 /// - on success, or when the target already exists (409),
 /// - when the source is gone / no longer readable (any permanent error):
-///   the image then stays missing, by design (no data leak after revoke).
+///   the blob then stays missing, by design (no data leak after revoke).
 /// Network/transient errors leave the row for the next sync. Runs right
 /// after a copy (ShareRepository) and on every sync (leftovers).
 class NoteImageCopyProcessor {
-  NoteImageCopyProcessor(this._remote, this._cache);
+  NoteImageCopyProcessor(
+    this._remote,
+    LocalImageCache imageCache, {
+    LocalImageCache? attachmentCache,
+  }) : _caches = {
+         SyncTables.noteImagesBucket: imageCache,
+         SyncTables.attachmentsBucket: ?attachmentCache,
+       };
 
   final ImageRemoteDataSource _remote;
-  final LocalImageCache _cache;
+  final Map<String, LocalImageCache> _caches;
   Future<int>? _running;
 
   /// Processes all pending copies. Returns the number of rows completed.
@@ -29,9 +40,20 @@ class NoteImageCopyProcessor {
     var done = 0;
     for (final copy in copies) {
       try {
-        await _remote.copyImage(copy.fromPath, copy.toPath);
-        final cached = await _cache.read(copy.fromPath);
-        if (cached != null) await _cache.write(copy.toPath, cached);
+        await _remote.copyImage(
+          copy.fromPath,
+          copy.toPath,
+          bucket: copy.bucket,
+        );
+        final cache = _caches[copy.bucket];
+        if (cache != null) {
+          try {
+            final cached = await cache.read(copy.fromPath);
+            if (cached != null) await cache.write(copy.toPath, cached);
+          } catch (_) {
+            // Local cache is best effort; the copy is downloaded on demand.
+          }
+        }
       } on RemoteException catch (e) {
         switch (e.kind) {
           case RemoteErrorKind.network:

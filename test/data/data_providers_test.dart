@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:quiz_app/core/providers.dart';
 import 'package:quiz_app/data/data_providers.dart';
 import 'package:quiz_app/data/models/models.dart';
+import 'package:quiz_app/data/repositories/attachment_repository.dart';
 import 'package:quiz_app/data/repositories/auth_repository.dart';
 import 'package:quiz_app/data/sync/connectivity_monitor.dart';
 import 'package:quiz_app/data/sync/default_sync_engine.dart';
@@ -94,4 +97,68 @@ void main() {
       await auth.changes.close();
     },
   );
+
+  test('attachment and note-picker providers', () async {
+    final remote = FakeRemote(userId: 'user-a');
+    final auth = _FakeAuth();
+    final container = ProviderContainer(
+      overrides: [
+        authRepositoryProvider.overrideWithValue(auth),
+        localDatabaseProvider.overrideWithValue(h.db),
+        syncRemoteDataSourceProvider.overrideWithValue(remote),
+        imageRemoteDataSourceProvider.overrideWithValue(remote),
+        shareRemoteDataSourceProvider.overrideWithValue(remote),
+        connectivityMonitorProvider.overrideWithValue(
+          const AlwaysOnlineMonitor(),
+        ),
+        clockProvider.overrideWithValue(h.clockFn),
+      ],
+    );
+    addTearDown(container.dispose);
+    addTearDown(auth.changes.close);
+
+    final subject = await container
+        .read(subjectRepositoryProvider)
+        .create(title: 'Bio');
+    await container
+        .read(noteRepositoryProvider)
+        .create(subjectId: subject.id, title: 'Cells', contentMd: 'Mitosis');
+    final file = await container
+        .read(attachmentRepositoryProvider)
+        .add(
+          subjectId: subject.id,
+          name: 'slides.pdf',
+          bytes: Uint8List.fromList([1]),
+        );
+
+    Future<T> first<T>(ProviderListenable<AsyncValue<T>> p) async {
+      final completer = Completer<T>();
+      final sub = container.listen(p, (_, next) {
+        if (next.hasValue && !completer.isCompleted) {
+          completer.complete(next.value as T);
+        }
+      }, fireImmediately: true);
+      final value = await completer.future;
+      sub.close();
+      return value;
+    }
+
+    expect(await first(attachmentsForSubjectProvider(subject.id)), [file]);
+    expect(await first(accessibleAttachmentsProvider), [file]);
+    expect(await first(attachmentProvider(file.id)), file);
+    expect(
+      (await first(attachmentUploadProvider(file.id))).phase,
+      AttachmentUploadPhase.queued,
+    );
+    expect(await first(accessibleNotesProvider), hasLength(1));
+    expect(await first(noteSearchProvider('MITOSIS')), hasLength(1));
+    expect(await first(noteSearchProvider('nothing')), isEmpty);
+
+    await container.read(syncEngineProvider).sync();
+    expect(remote.attachmentObjects.keys, [file.storagePath]);
+    expect(
+      await first(attachmentUploadProvider(file.id)),
+      AttachmentUploadState.done,
+    );
+  });
 }
