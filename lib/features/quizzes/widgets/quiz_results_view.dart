@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/models/question.dart';
 import '../domain/quiz_session.dart';
 import 'quiz_format.dart';
@@ -32,6 +33,8 @@ class QuizResultsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final wide = Breakpoints.isMedium(context);
     final s = session;
     final percent = (s.fraction * 100).round();
     final missed = s.missedQuestions.length;
@@ -41,95 +44,93 @@ class QuizResultsView extends StatelessWidget {
       >= 50 => 'Good effort. Keep practising!',
       _ => 'Keep going, review the answers below.',
     };
-    final color = percent >= 80
-        ? Colors.green.shade600
-        : percent >= 50
-        ? Colors.orange.shade700
-        : theme.colorScheme.error;
+    final color = scoreColor(context, percent);
 
-    final summary = Card(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            SizedBox.square(
-              dimension: 132,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  CircularProgressIndicator(
-                    value: s.fraction,
-                    strokeWidth: 10,
-                    color: color,
-                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                  ),
-                  Center(
-                    child: Text(
-                      '$percent%',
-                      key: const Key('result-percent'),
-                      style: theme.textTheme.headlineMedium,
-                    ),
-                  ),
-                ],
+    final summary = AppCard(
+      padding: EdgeInsets.all(wide ? Insets.xxl : Insets.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Your score',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: colors.mutedText,
+            ),
+          ),
+          Gaps.h4,
+          Text(
+            '$percent%',
+            key: const Key('result-percent'),
+            style: theme.textTheme.displayMedium?.copyWith(
+              color: color,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          Gaps.h4,
+          Text(message, style: theme.textTheme.titleLarge),
+          Gaps.h16,
+          ClipRRect(
+            borderRadius: Radii.xsAll,
+            child: LinearProgressIndicator(
+              value: s.fraction,
+              minHeight: 4,
+              color: color,
+              backgroundColor: colors.hairline,
+            ),
+          ),
+          Gaps.h12,
+          Text(
+            '${s.correctCount} of ${s.length} correct · '
+            '${formatDuration(duration)}',
+            key: const Key('result-summary'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colors.mutedText,
+            ),
+          ),
+          _SaveLine(status: saveStatus, error: saveError, onRetry: onRetrySave),
+          Gaps.h24,
+          Wrap(
+            spacing: Insets.sm,
+            runSpacing: Insets.sm,
+            children: [
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.replay, size: 18),
+                label: const Text('Retry'),
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(message, style: theme.textTheme.titleLarge),
-            const SizedBox(height: 4),
-            Text(
-              '${s.correctCount} of ${s.length} correct · '
-              '${formatDuration(duration)}',
-              key: const Key('result-summary'),
-              style: theme.textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 12),
-            _SaveLine(
-              status: saveStatus,
-              error: saveError,
-              onRetry: onRetrySave,
-            ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                FilledButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.replay),
-                  label: const Text('Retry'),
+              if (onRetryMissed != null)
+                FilledButton.tonalIcon(
+                  onPressed: onRetryMissed,
+                  icon: const Icon(Icons.flag_outlined, size: 18),
+                  label: Text('Retry missed ($missed)'),
                 ),
-                if (onRetryMissed != null)
-                  FilledButton.tonalIcon(
-                    onPressed: onRetryMissed,
-                    icon: const Icon(Icons.flag_outlined),
-                    label: Text('Retry missed ($missed)'),
-                  ),
-                OutlinedButton(onPressed: onDone, child: const Text('Done')),
-              ],
-            ),
-          ],
-        ),
+              OutlinedButton(onPressed: onDone, child: const Text('Done')),
+            ],
+          ),
+        ],
       ),
     );
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(vertical: wide ? Insets.xl : Insets.lg),
       children: [
-        MaxWidth(maxWidth: 720, child: summary),
-        const SizedBox(height: 16),
-        MaxWidth(
-          maxWidth: 720,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text('Review', style: theme.textTheme.titleMedium),
+        ContentContainer(child: summary),
+        ContentContainer(
+          child: SectionHeader(
+            title: 'Review',
+            count: s.items.length,
+            subtitle: missed == 0
+                ? 'Every answer was right.'
+                : '${plural(missed, 'question')} to look at again.',
+            padding: const EdgeInsets.only(top: Insets.xl, bottom: Insets.sm),
           ),
         ),
-        const SizedBox(height: 8),
         for (var i = 0; i < s.items.length; i++)
-          MaxWidth(
-            maxWidth: 720,
-            child: _ReviewCard(index: i, item: s.items[i], session: s),
+          ContentContainer(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: Insets.sm),
+              child: _ReviewCard(index: i, item: s.items[i], session: s),
+            ),
           ),
       ],
     );
@@ -146,34 +147,43 @@ class _SaveLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final style = theme.textTheme.bodySmall?.copyWith(
-      color: theme.colorScheme.onSurfaceVariant,
+    final colors = AppColors.of(context);
+    final style = theme.textTheme.bodySmall?.copyWith(color: colors.faintText);
+    Widget line(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.only(top: Insets.xs),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: colors.faintText),
+          Gaps.w4,
+          Flexible(child: Text(text, style: style)),
+        ],
+      ),
     );
     return switch (status) {
       SaveStatus.idle => const SizedBox.shrink(),
-      SaveStatus.saving => Text('Saving your attempt…', style: style),
-      SaveStatus.saved => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.cloud_done_outlined, size: 16, color: style?.color),
-          const SizedBox(width: 6),
-          Flexible(child: Text('Saved to your history', style: style)),
-        ],
+      SaveStatus.saving => line(
+        Icons.cloud_upload_outlined,
+        'Saving your attempt…',
       ),
-      SaveStatus.practice => Text(
+      SaveStatus.saved => line(
+        Icons.cloud_done_outlined,
+        'Saved to your history',
+      ),
+      SaveStatus.practice => line(
+        Icons.school_outlined,
         'Practice round: not added to your history.',
-        style: style,
       ),
-      SaveStatus.failed => Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        alignment: WrapAlignment.center,
-        children: [
-          Text(
-            'Could not save this attempt: ${error ?? 'unknown error'}',
-            style: style?.copyWith(color: theme.colorScheme.error),
+      SaveStatus.failed => Padding(
+        padding: const EdgeInsets.only(top: Insets.md),
+        child: InfoBanner(
+          kind: InfoBannerKind.error,
+          message: 'Could not save this attempt: ${error ?? 'unknown error'}',
+          action: TextButton(
+            onPressed: onRetry,
+            child: const Text('Try again'),
           ),
-          TextButton(onPressed: onRetry, child: const Text('Try again')),
-        ],
+        ),
       ),
     };
   }
@@ -193,10 +203,11 @@ class _ReviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final q = item.question;
     final grade = session.gradeFor(item.id);
-    final green = Colors.green.shade600;
-    final label = TextStyle(color: theme.colorScheme.onSurfaceVariant);
+    final ok = grade == true;
+    final label = TextStyle(color: colors.mutedText);
 
     String yours;
     String correct;
@@ -212,71 +223,84 @@ class _ReviewCard extends StatelessWidget {
       correct = q.answerText ?? '—';
     }
 
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              grade == true ? Icons.check_circle : Icons.cancel,
-              color: grade == true ? green : theme.colorScheme.error,
+    return AppCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(
+              ok ? Icons.check_circle_outline : Icons.highlight_off,
+              size: 20,
+              color: ok ? colors.success : colors.danger,
+              semanticLabel: ok ? 'Correct' : 'Incorrect',
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${index + 1}. ${q.prompt}',
-                    style: theme.textTheme.titleSmall,
+          ),
+          Gaps.w12,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${index + 1}. ${q.prompt}',
+                  style: theme.textTheme.titleSmall,
+                ),
+                Gaps.h8,
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(text: 'Your answer: ', style: label),
+                      TextSpan(
+                        text: yours,
+                        style: ok
+                            ? null
+                            : TextStyle(
+                                color: colors.danger,
+                                decoration: q.type.hasOptions
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                decorationColor: colors.danger,
+                              ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                  style: theme.textTheme.bodyMedium,
+                ),
+                if (!ok || q.type == QuestionType.shortAnswer)
                   Text.rich(
                     TextSpan(
                       children: [
-                        TextSpan(text: 'Your answer: ', style: label),
-                        TextSpan(text: yours),
+                        TextSpan(
+                          text: q.type == QuestionType.shortAnswer
+                              ? 'Model answer: '
+                              : 'Correct answer: ',
+                          style: label,
+                        ),
+                        TextSpan(
+                          text: correct,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: colors.success,
+                          ),
+                        ),
                       ],
                     ),
+                    style: theme.textTheme.bodyMedium,
                   ),
-                  if (grade != true || q.type == QuestionType.shortAnswer)
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: q.type == QuestionType.shortAnswer
-                                ? 'Model answer: '
-                                : 'Correct answer: ',
-                            style: label,
-                          ),
-                          TextSpan(
-                            text: correct,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
+                if (q.explanation != null &&
+                    q.explanation!.trim().isNotEmpty) ...[
+                  Gaps.h8,
+                  Text(
+                    q.explanation!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.mutedText,
                     ),
-                  if (q.explanation != null &&
-                      q.explanation!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      q.explanation!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

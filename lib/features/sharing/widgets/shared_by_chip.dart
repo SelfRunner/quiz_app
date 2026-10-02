@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/theme/app_colors.dart';
 import '../../../data/data_providers.dart';
 import '../sharing_ui.dart';
 
@@ -42,22 +43,23 @@ class SharedByChip extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final name =
         ownerName ?? ref.watch(sharedOwnerNamesProvider).value?[ownerId];
-    final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
     return Tooltip(
       message: "View only. Copy it to your account if you'd like to edit it.",
       child: Chip(
         avatar: Icon(
           Icons.people_alt_outlined,
-          size: 18,
-          color: scheme.onTertiaryContainer,
+          size: 16,
+          color: colors.mutedText,
         ),
         label: Text(
           name == null ? 'Shared with you' : 'Shared by $name',
           overflow: TextOverflow.ellipsis,
         ),
-        labelStyle: TextStyle(color: scheme.onTertiaryContainer),
-        backgroundColor: scheme.tertiaryContainer,
-        side: BorderSide.none,
+        labelStyle: Theme.of(context).textTheme.labelMedium
+            ?.copyWith(color: colors.mutedText),
+        backgroundColor: colors.sidebar,
+        side: BorderSide(color: colors.hairline),
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),

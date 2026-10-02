@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/errors/app_exception.dart';
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../../data/sync/sync_engine.dart';
@@ -101,9 +102,9 @@ class _SharedWithMeScreenState extends ConsumerState<SharedWithMeScreen> {
               ? 'Connect to the internet to see what others have shared '
                     'with you.'
               : friendlyError(error),
-          action: FilledButton.tonalIcon(
+          action: OutlinedButton.icon(
             onPressed: () => _refreshKey.currentState?.show(),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Try again'),
           ),
         );
@@ -140,12 +141,12 @@ class _SharedWithMeScreenState extends ConsumerState<SharedWithMeScreen> {
                 : () => _refreshKey.currentState?.show(),
             icon: _refreshing
                 ? const SizedBox.square(
-                    dimension: 20,
+                    dimension: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.refresh),
           ),
-          const SizedBox(width: 8),
+          Gaps.w8,
         ],
       ),
       body: RefreshIndicator(
@@ -179,31 +180,30 @@ class _SharedList extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const maxWidth = 1040.0;
+        const maxWidth = ContentWidth.wide;
         final width = constraints.maxWidth.clamp(0.0, maxWidth);
-        final hPad = constraints.maxWidth >= kSharingWideBreakpoint
-            ? 24.0
-            : 16.0;
+        final hPad = Breakpoints.gutter(context);
         final inner = width - hPad * 2;
         final columns = inner >= 760 ? 2 : 1;
-        const gap = 12.0;
+        const gap = Insets.sm;
         final itemWidth = (inner - gap * (columns - 1)) / columns;
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.symmetric(
-            horizontal: hPad + (constraints.maxWidth - width) / 2,
-            vertical: 16,
+          padding: EdgeInsets.fromLTRB(
+            hPad + (constraints.maxWidth - width) / 2,
+            Insets.sm,
+            hPad + (constraints.maxWidth - width) / 2,
+            Insets.xxl,
           ),
           children: [
-            if (showStaleBanner) ...[
-              const _StaleBanner(),
-              const SizedBox(height: 16),
-            ],
+            if (showStaleBanner) ...[Gaps.h8, const _StaleBanner()],
             for (final entry in groups.entries)
               if (entry.value.isNotEmpty) ...[
-                _SectionHeader(type: entry.key, count: entry.value.length),
-                const SizedBox(height: 8),
+                SectionHeader(
+                  title: entry.key.pluralTitle,
+                  count: entry.value.length,
+                ),
                 Wrap(
                   spacing: gap,
                   runSpacing: gap,
@@ -215,39 +215,11 @@ class _SharedList extends StatelessWidget {
                       ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                Gaps.h8,
               ],
           ],
         );
       },
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.type, required this.count});
-
-  final ShareResourceType type;
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Semantics(
-      header: true,
-      child: Row(
-        children: [
-          Icon(type.icon, size: 20, color: theme.colorScheme.primary),
-          const SizedBox(width: 8),
-          Text(type.pluralTitle, style: theme.textTheme.titleMedium),
-          const SizedBox(width: 8),
-          Badge.count(
-            count: count,
-            backgroundColor: theme.colorScheme.secondaryContainer,
-            textColor: theme.colorScheme.onSecondaryContainer,
-          ),
-        ],
-      ),
     );
   }
 }
@@ -268,79 +240,79 @@ class SharedItemCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final colors = AppColors.of(context);
     final owner = profileLabel(share.owner, fallback: 'Someone');
     final title = share.resourceTitle?.trim().isNotEmpty == true
         ? share.resourceTitle!.trim()
         : 'Untitled ${share.resourceType.noun}';
 
-    Color? accent;
-    if (share.resourceType == ShareResourceType.subject) {
-      final color = ref.watch(subjectProvider(share.resourceId)).value?.color;
-      if (color != null) accent = Color(color);
-    }
+    final isSubject = share.resourceType == ShareResourceType.subject;
+    final subjectColor = isSubject
+        ? ref.watch(subjectProvider(share.resourceId)).value?.color
+        : null;
 
-    return Card.outlined(
+    return AppCard(
       key: ValueKey('shared-${share.id}'),
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => unawaited(context.push(_route)),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color:
-                      accent?.withValues(alpha: 0.18) ??
-                      scheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
+      onTap: () => unawaited(context.push(_route)),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Insets.lg,
+        vertical: Insets.md,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 20,
+            height: 24,
+            child: Center(
+              child: isSubject
+                  ? SubjectColorDot(color: subjectColor)
+                  : Icon(
+                      share.resourceType.icon,
+                      size: 18,
+                      color: colors.mutedText,
+                    ),
+            ),
+          ),
+          Gaps.w12,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleMedium,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                child: Icon(
-                  share.resourceType.icon,
-                  color: accent ?? scheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Gaps.h4,
+                Row(
                   children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.titleMedium,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        InitialsAvatar(label: owner, radius: 10),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            'Shared by $owner',
-                            style: theme.textTheme.bodyMedium,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                    InitialsAvatar(label: owner, radius: 9),
+                    Gaps.w8,
+                    Flexible(
+                      child: Text(
+                        'Shared by $owner',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colors.mutedText,
                         ),
-                      ],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    _DetailsLine(share: share),
                   ],
                 ),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-            ],
+                Gaps.h2,
+                _DetailsLine(share: share),
+              ],
+            ),
           ),
-        ),
+          Gaps.w8,
+          Padding(
+            padding: const EdgeInsets.only(top: Insets.xxs),
+            child: Icon(Icons.chevron_right, size: 18, color: colors.faintText),
+          ),
+        ],
       ),
     );
   }
@@ -374,7 +346,7 @@ class _DetailsLine extends ConsumerWidget {
     return Text(
       parts.join(' · '),
       style: Theme.of(context).textTheme.bodySmall
-          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ?.copyWith(color: AppColors.of(context).faintText),
     );
   }
 
@@ -388,31 +360,12 @@ class _StaleBanner extends StatelessWidget {
   const _StaleBanner();
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      key: const ValueKey('shared-offline-banner'),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Icon(Icons.cloud_off_outlined, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                "You're offline. Shared items may be out of date.",
-                style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const InfoBanner(
+    key: ValueKey('shared-offline-banner'),
+    kind: InfoBannerKind.warning,
+    icon: Icons.cloud_off_outlined,
+    message: "You're offline. Shared items may be out of date.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -426,8 +379,13 @@ class _LoadingView extends StatelessWidget {
   Widget build(BuildContext context) => ListView(
     physics: const AlwaysScrollableScrollPhysics(),
     children: const [
-      SizedBox(height: 160),
-      Center(child: CircularProgressIndicator()),
+      ContentContainer(
+        maxWidth: ContentWidth.wide,
+        child: Padding(
+          padding: EdgeInsets.only(top: Insets.xl),
+          child: LoadingSkeleton(rows: 5),
+        ),
+      ),
     ],
   );
 }
@@ -452,7 +410,7 @@ class _EmptyView extends ConsumerWidget {
           'editable copy.',
       footer: offline
           ? const Padding(
-              padding: EdgeInsets.only(top: 24),
+              padding: EdgeInsets.only(top: Insets.lg),
               child: _StaleBanner(),
             )
           : null,
@@ -477,7 +435,6 @@ class _MessageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return LayoutBuilder(
       builder: (context, constraints) => SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -487,29 +444,17 @@ class _MessageView extends StatelessWidget {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Padding(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.all(Insets.xxl),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(icon, size: 64, color: theme.colorScheme.primary),
-                    const SizedBox(height: 16),
-                    Text(
-                      title,
-                      style: theme.textTheme.titleLarge,
-                      textAlign: TextAlign.center,
+                    EmptyState(
+                      icon: icon,
+                      title: title,
+                      message: message,
+                      action: action,
+                      compact: true,
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      message,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    if (action != null) ...[
-                      const SizedBox(height: 24),
-                      action!,
-                    ],
                     ?footer,
                   ],
                 ),

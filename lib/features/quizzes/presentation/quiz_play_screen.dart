@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/data_providers.dart';
 import '../../../data/models/question.dart';
 import '../../../data/models/quiz.dart';
@@ -273,17 +274,24 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
         ),
       };
     } else if (quizAsync.hasValue) {
-      body = const MessageView(icon: Icons.search_off, title: 'Quiz not found');
+      body = const NotFoundView(what: 'Quiz');
     } else if (quizAsync.hasError) {
-      body = MessageView(
+      body = EmptyState(
         icon: Icons.error_outline,
         title: 'Could not load the quiz',
         message: errorText(quizAsync.error!),
       );
     } else {
-      body = const Center(child: CircularProgressIndicator());
+      body = const ContentContainer(
+        maxWidth: ContentWidth.form,
+        child: Padding(
+          padding: EdgeInsets.only(top: Insets.xl),
+          child: LoadingSkeleton(rows: 3, leading: false),
+        ),
+      );
     }
 
+    final colors = AppColors.of(context);
     return PopScope(
       canPop: !playing,
       onPopInvokedWithResult: (didPop, _) {
@@ -296,7 +304,13 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
             icon: const Icon(Icons.close),
             onPressed: () => playing ? _confirmQuit() : _close(),
           ),
-          title: Text(quiz?.title ?? 'Play quiz'),
+          title: Text(
+            quiz?.title ?? 'Play quiz',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(color: colors.mutedText),
+          ),
         ),
         body: SafeArea(child: body),
       ),
@@ -328,76 +342,85 @@ class _SetupView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final count = quiz.questions.length;
+    final wide = Breakpoints.isMedium(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: MaxWidth(
-        maxWidth: 560,
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Icon(
-                  Icons.quiz_outlined,
-                  size: 48,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  quiz.title,
-                  style: theme.textTheme.headlineSmall,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  plural(count, 'question'),
-                  style: theme.textTheme.bodyLarge,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('Shuffle questions'),
-                  value: shuffleQuestions,
-                  onChanged: onShuffleQuestions,
-                ),
-                SwitchListTile(
-                  title: const Text('Shuffle answer options'),
-                  value: shuffleOptions,
-                  onChanged: onShuffleOptions,
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  key: const Key('start-quiz'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
-                  ),
-                  onPressed: count == 0 ? null : onStart,
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('Start'),
-                ),
-                if (count == 0) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'This quiz has no questions yet.',
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-                if (isWide(context)) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    'Keyboard: 1–9 pick an option · Enter checks / continues · '
-                    'Y / N grade short answers',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ],
+      child: ContentContainer(
+        maxWidth: ContentWidth.form,
+        padding: wide ? Insets.pageWide : Insets.page,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Gaps.h24,
+            Icon(Icons.quiz_outlined, size: 32, color: colors.faintText),
+            Gaps.h16,
+            Text(
+              quiz.title,
+              style: theme.textTheme.headlineMedium,
+              textAlign: TextAlign.center,
             ),
-          ),
+            Gaps.h4,
+            Text(
+              plural(count, 'question'),
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: colors.mutedText,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            Gaps.h32,
+            AppCard(
+              padding: const EdgeInsets.symmetric(vertical: Insets.xs),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: const Text('Shuffle questions'),
+                    value: shuffleQuestions,
+                    onChanged: onShuffleQuestions,
+                  ),
+                  Divider(height: 1, color: colors.hairline),
+                  SwitchListTile(
+                    title: const Text('Shuffle answer options'),
+                    value: shuffleOptions,
+                    onChanged: onShuffleOptions,
+                  ),
+                ],
+              ),
+            ),
+            Gaps.h24,
+            FilledButton.icon(
+              key: const Key('start-quiz'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+              onPressed: count == 0 ? null : onStart,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const Text('Start'),
+            ),
+            if (count == 0) ...[
+              Gaps.h12,
+              Text(
+                'This quiz has no questions yet.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.mutedText,
+                ),
+              ),
+            ],
+            if (wide) ...[
+              Gaps.h24,
+              const Wrap(
+                alignment: WrapAlignment.center,
+                spacing: Insets.lg,
+                runSpacing: Insets.sm,
+                children: [
+                  KeyboardShortcutHint(keys: ['1–9'], label: 'Pick'),
+                  KeyboardShortcutHint(keys: ['Enter'], label: 'Check / next'),
+                  KeyboardShortcutHint(keys: ['Y', 'N'], label: 'Grade'),
+                ],
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -435,44 +458,52 @@ class _QuestionView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final wide = Breakpoints.isMedium(context);
     final s = session;
     final item = s.current;
     final q = item.question;
     final checked = s.isChecked(item.id);
     final revealed = s.isRevealed(item.id);
     final grade = s.gradeFor(item.id);
+    final mono = theme.textTheme.labelMedium?.copyWith(
+      color: colors.mutedText,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
 
     final content = <Widget>[
       Row(
         children: [
-          Text(
-            'Question ${s.index + 1} of ${s.length}',
-            style: theme.textTheme.labelLarge,
-          ),
+          Text('Question ${s.index + 1} of ${s.length}', style: mono),
           const Spacer(),
-          Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
-          const SizedBox(width: 4),
-          Text('${s.correctCount} / ${s.answeredCount}'),
+          Tooltip(
+            message: 'Correct so far',
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check, size: 14, color: colors.success),
+                Gaps.w4,
+                Text('${s.correctCount} / ${s.answeredCount}', style: mono),
+              ],
+            ),
+          ),
         ],
       ),
-      const SizedBox(height: 8),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: LinearProgressIndicator(
-          value: (s.answeredCount) / s.length,
-          minHeight: 6,
-        ),
-      ),
-      const SizedBox(height: 24),
+      SizedBox(height: wide ? Insets.xxl : Insets.xl),
       Text(
         _hint(q.type),
-        style: theme.textTheme.labelLarge?.copyWith(
-          color: theme.colorScheme.primary,
-        ),
+        style: theme.textTheme.labelMedium?.copyWith(color: colors.faintText),
       ),
-      const SizedBox(height: 8),
-      Text(q.prompt, style: theme.textTheme.headlineSmall),
-      const SizedBox(height: 20),
+      Gaps.h8,
+      Text(
+        q.prompt,
+        style:
+            (wide
+                    ? theme.textTheme.headlineMedium
+                    : theme.textTheme.headlineSmall)
+                ?.copyWith(height: 1.4),
+      ),
+      Gaps.h24,
     ];
 
     if (q.type.hasOptions) {
@@ -481,7 +512,7 @@ class _QuestionView extends StatelessWidget {
         final original = item.optionOrder[d];
         content.add(
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.only(bottom: Insets.sm),
             child: _OptionTile(
               key: Key('option-$d'),
               number: d + 1,
@@ -490,6 +521,7 @@ class _QuestionView extends StatelessWidget {
               selected: selected.contains(original),
               checked: checked,
               correct: q.correctIndices.contains(original),
+              showKey: wide,
               onTap: checked ? null : () => onToggle(d),
             ),
           ),
@@ -501,8 +533,9 @@ class _QuestionView extends StatelessWidget {
           key: const Key('short-answer-input'),
           controller: answer,
           enabled: !revealed,
-          minLines: 1,
-          maxLines: 4,
+          minLines: 2,
+          maxLines: 6,
+          style: theme.textTheme.bodyLarge,
           textInputAction: TextInputAction.done,
           decoration: const InputDecoration(
             labelText: 'Your answer (optional)',
@@ -513,79 +546,147 @@ class _QuestionView extends StatelessWidget {
       );
       if (revealed) {
         content.addAll([
-          const SizedBox(height: 16),
-          _RevealCard(
-            title: 'Model answer',
-            text: q.answerText ?? '—',
-            color: theme.colorScheme.secondaryContainer,
-            onColor: theme.colorScheme.onSecondaryContainer,
+          Gaps.h16,
+          InfoBanner(
             icon: Icons.lightbulb_outline,
+            title: 'Model answer',
+            message: q.answerText ?? '—',
           ),
         ]);
       }
     }
 
+    final explanation = q.explanation?.trim();
     if (checked) {
+      final ok = grade ?? false;
+      final hasExplanation = explanation != null && explanation.isNotEmpty;
       content.addAll([
-        const SizedBox(height: 16),
-        _FeedbackBanner(correct: grade ?? false, explanation: q.explanation),
+        Gaps.h16,
+        InfoBanner(
+          key: const Key('answer-feedback'),
+          kind: ok ? InfoBannerKind.success : InfoBannerKind.error,
+          icon: ok ? Icons.check_circle_outline : Icons.highlight_off,
+          title: hasExplanation ? (ok ? 'Correct!' : 'Not quite') : null,
+          message: hasExplanation
+              ? explanation
+              : (ok ? 'Correct!' : 'Not quite'),
+        ),
       ]);
-    } else if (revealed && q.explanation != null) {
+    } else if (revealed && explanation != null && explanation.isNotEmpty) {
       content.addAll([
-        const SizedBox(height: 12),
-        Text(q.explanation!, style: theme.textTheme.bodyMedium),
+        Gaps.h12,
+        Text(
+          explanation,
+          style: theme.textTheme.bodyMedium?.copyWith(color: colors.mutedText),
+        ),
       ]);
     }
 
+    final selfGrading = !q.type.hasOptions && revealed && !checked;
+    final buttonSize = wide ? const Size(160, 44) : const Size.fromHeight(48);
     final Widget actions;
-    if (!q.type.hasOptions && revealed && !checked) {
-      actions = Row(
-        children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-                foregroundColor: theme.colorScheme.error,
-              ),
-              onPressed: () => onSelfGrade(false),
-              icon: const Icon(Icons.close),
-              label: const Text('I missed it'),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-                backgroundColor: Colors.green.shade700,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => onSelfGrade(true),
-              icon: const Icon(Icons.check),
-              label: const Text('I got it'),
-            ),
-          ),
-        ],
+    if (selfGrading) {
+      final missed = OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          minimumSize: buttonSize,
+          foregroundColor: colors.danger,
+        ),
+        onPressed: () => onSelfGrade(false),
+        icon: const Icon(Icons.close, size: 18),
+        label: const Text('I missed it'),
       );
+      final got = FilledButton.icon(
+        style: FilledButton.styleFrom(
+          minimumSize: buttonSize,
+          backgroundColor: colors.success,
+          foregroundColor: theme.colorScheme.surface,
+        ),
+        onPressed: () => onSelfGrade(true),
+        icon: const Icon(Icons.check, size: 18),
+        label: const Text('I got it'),
+      );
+      actions = wide
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [missed, Gaps.w8, got],
+            )
+          : Row(
+              children: [
+                Expanded(child: missed),
+                Gaps.w12,
+                Expanded(child: got),
+              ],
+            );
     } else {
       final label = checked
           ? (s.isLast ? 'See results' : 'Next')
           : (q.type.hasOptions ? 'Check' : 'Show answer');
       actions = FilledButton(
         key: const Key('primary-action'),
-        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        style: FilledButton.styleFrom(minimumSize: buttonSize),
         onPressed: checked || s.canCheck ? onPrimary : null,
         child: Text(label),
       );
     }
 
+    final Widget bar;
+    if (wide) {
+      final hints = <Widget>[
+        if (q.type.hasOptions && !checked)
+          KeyboardShortcutHint(
+            keys: [
+              item.optionOrder.length > 1
+                  ? '1–${item.optionOrder.length.clamp(1, 9)}'
+                  : '1',
+            ],
+            label: 'Pick',
+          ),
+        if (selfGrading)
+          const KeyboardShortcutHint(keys: ['Y', 'N'], label: 'Got it / missed')
+        else
+          KeyboardShortcutHint(
+            keys: const ['Enter'],
+            label: checked
+                ? (s.isLast ? 'Results' : 'Next')
+                : (q.type.hasOptions ? 'Check' : 'Show answer'),
+          ),
+      ];
+      bar = Row(
+        children: [
+          Expanded(
+            child: Wrap(
+              spacing: Insets.lg,
+              runSpacing: Insets.xs,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: hints,
+            ),
+          ),
+          Gaps.w16,
+          actions,
+        ],
+      );
+    } else {
+      bar = SizedBox(width: double.infinity, child: actions);
+    }
+
     return Column(
       children: [
+        LinearProgressIndicator(
+          key: const Key('quiz-progress'),
+          value: s.length == 0 ? 0 : s.answeredCount / s.length,
+          minHeight: 2,
+          color: theme.colorScheme.primary,
+          backgroundColor: colors.hairline,
+        ),
         Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: MaxWidth(
-              maxWidth: 720,
+            child: ContentContainer(
+              padding: EdgeInsets.fromLTRB(
+                Breakpoints.gutter(context),
+                wide ? Insets.xl : Insets.lg,
+                Breakpoints.gutter(context),
+                Insets.xl,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: content,
@@ -593,11 +694,17 @@ class _QuestionView extends StatelessWidget {
             ),
           ),
         ),
-        Material(
-          elevation: 3,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: MaxWidth(maxWidth: 720, child: actions),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            border: Border(top: BorderSide(color: colors.hairline)),
+          ),
+          child: ContentContainer(
+            padding: EdgeInsets.symmetric(
+              horizontal: Breakpoints.gutter(context),
+              vertical: Insets.md,
+            ),
+            child: bar,
           ),
         ),
       ],
@@ -605,7 +712,10 @@ class _QuestionView extends StatelessWidget {
   }
 }
 
-class _OptionTile extends StatelessWidget {
+/// One answer option. Idle rows are hairline-bordered; hover darkens the
+/// border, selection uses the text color, and after checking the correct
+/// option turns success-green and a wrong pick danger-red.
+class _OptionTile extends StatefulWidget {
   const _OptionTile({
     super.key,
     required this.number,
@@ -614,6 +724,7 @@ class _OptionTile extends StatelessWidget {
     required this.selected,
     required this.checked,
     required this.correct,
+    required this.showKey,
     required this.onTap,
   });
 
@@ -623,143 +734,104 @@ class _OptionTile extends StatelessWidget {
   final bool selected;
   final bool checked;
   final bool correct;
+  final bool showKey;
   final VoidCallback? onTap;
 
   @override
+  State<_OptionTile> createState() => _OptionTileState();
+}
+
+class _OptionTileState extends State<_OptionTile> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final green = Colors.green.shade600;
-    Color border = scheme.outlineVariant;
-    Color? fill;
-    IconData icon = multi
-        ? (selected ? Icons.check_box : Icons.check_box_outline_blank)
-        : (selected ? Icons.radio_button_checked : Icons.radio_button_off);
-    Color iconColor = selected ? scheme.primary : scheme.outline;
-    if (!checked && selected) {
-      border = scheme.primary;
-      fill = scheme.primaryContainer.withValues(alpha: 0.5);
-    }
-    if (checked) {
-      if (correct) {
-        border = green;
-        fill = green.withValues(alpha: 0.12);
-        icon = Icons.check_circle;
-        iconColor = green;
-      } else if (selected) {
-        border = scheme.error;
-        fill = scheme.errorContainer.withValues(alpha: 0.5);
-        icon = Icons.cancel;
-        iconColor = scheme.error;
+    final colors = AppColors.of(context);
+    final w = widget;
+    var border = colors.hairline;
+    var borderWidth = 1.0;
+    var fill = colors.card;
+    var textColor = theme.colorScheme.onSurface;
+    var icon = w.multi
+        ? (w.selected ? Icons.check_box : Icons.check_box_outline_blank)
+        : (w.selected ? Icons.radio_button_checked : Icons.radio_button_off);
+    var iconColor = w.selected ? theme.colorScheme.onSurface : colors.faintText;
+    String? status;
+
+    if (!w.checked) {
+      if (w.selected) {
+        border = theme.colorScheme.onSurface;
+        borderWidth = 1.5;
+        fill = Color.alphaBlend(colors.hover, colors.card);
+      } else if (_hovered) {
+        border = colors.border;
+        fill = Color.alphaBlend(colors.hover, colors.card);
       }
+    } else if (w.correct) {
+      border = colors.success;
+      borderWidth = 1.5;
+      fill = colors.successContainer;
+      textColor = colors.onSuccessContainer;
+      icon = Icons.check_circle;
+      iconColor = colors.success;
+      status = 'correct answer';
+    } else if (w.selected) {
+      border = colors.danger;
+      borderWidth = 1.5;
+      fill = colors.dangerContainer;
+      textColor = colors.onDangerContainer;
+      icon = Icons.cancel;
+      iconColor = colors.danger;
+      status = 'incorrect';
+    } else {
+      textColor = colors.mutedText;
     }
+
     return Semantics(
-      selected: selected,
+      selected: w.selected,
       button: true,
-      child: Material(
-        color: fill ?? Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: border, width: selected || checked ? 2 : 1),
+      value: status,
+      child: AnimatedContainer(
+        duration: Motion.fast,
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: Radii.lgAll,
+          border: Border.all(color: border, width: borderWidth),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            child: Row(
-              children: [
-                Icon(icon, color: iconColor),
-                const SizedBox(width: 12),
-                Expanded(child: Text(text, style: theme.textTheme.bodyLarge)),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: w.onTap,
+            onHover: (v) => setState(() => _hovered = v),
+            borderRadius: Radii.lgAll,
+            hoverColor: Colors.transparent,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Insets.lg,
+                vertical: Insets.md + 2,
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, size: 20, color: iconColor),
+                  Gaps.w12,
+                  Expanded(
+                    child: Text(
+                      w.text,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: textColor,
+                      ),
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: scheme.outlineVariant),
-                  ),
-                  child: Text('$number', style: theme.textTheme.labelSmall),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FeedbackBanner extends StatelessWidget {
-  const _FeedbackBanner({required this.correct, this.explanation});
-
-  final bool correct;
-  final String? explanation;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final green = Colors.green.shade700;
-    return _RevealCard(
-      title: correct ? 'Correct!' : 'Not quite',
-      text: explanation,
-      icon: correct ? Icons.check_circle : Icons.cancel,
-      color: correct
-          ? green.withValues(alpha: 0.12)
-          : scheme.errorContainer.withValues(alpha: 0.6),
-      onColor: correct ? green : scheme.onErrorContainer,
-    );
-  }
-}
-
-class _RevealCard extends StatelessWidget {
-  const _RevealCard({
-    required this.title,
-    required this.text,
-    required this.icon,
-    required this.color,
-    required this.onColor,
-  });
-
-  final String title;
-  final String? text;
-  final IconData icon;
-  final Color color;
-  final Color onColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: onColor),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: theme.textTheme.titleMedium?.copyWith(color: onColor),
-                ),
-                if (text != null && text!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(text!, style: theme.textTheme.bodyMedium),
+                  if (w.showKey) ...[
+                    Gaps.w8,
+                    KeyboardShortcutHint(keys: ['${w.number}']),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:quiz_app/data/models/models.dart';
+import 'package:quiz_app/features/quizzes/widgets/question_list_editor.dart';
 import 'package:quiz_app/features/quizzes/widgets/quiz_list_section.dart';
 
 import 'support/fakes.dart';
@@ -187,7 +188,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Duplicate'));
     await tester.pumpAndSettle();
-    expect(find.text('Questions (3)'), findsOneWidget);
+    expect(find.byType(QuestionCard), findsNWidgets(3));
 
     await tester.tap(find.byKey(const Key('save-quiz')));
     await tester.pumpAndSettle();

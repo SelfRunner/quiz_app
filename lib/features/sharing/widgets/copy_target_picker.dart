@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../sharing_ui.dart';
@@ -76,15 +77,14 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
       AsyncValue(:final value?, hasValue: true) => _buildChoices(
         value.where((s) => s.isOwnedBy(userId) && !s.isDeleted).toList(),
       ),
-      AsyncValue(:final error?) => Text(friendlyError(error)),
-      _ => const Padding(
-        padding: EdgeInsets.all(24),
-        child: Center(child: CircularProgressIndicator()),
+      AsyncValue(:final error?) => InfoBanner(
+        kind: InfoBannerKind.error,
+        message: friendlyError(error),
       ),
+      _ => const LoadingSkeleton(rows: 3, subtitle: false),
     };
 
     return AlertDialog(
-      icon: const Icon(Icons.drive_file_move_outlined),
       title: Text('Copy ${widget.type.noun} to…'),
       content: SizedBox(
         width: 420,
@@ -97,9 +97,11 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
                   ? 'Choose one of your subjects. The note and its quizzes '
                         'will be copied there, including images.'
                   : 'Choose one of your subjects to copy the quiz into.',
-              style: theme.textTheme.bodyMedium,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: AppColors.of(context).mutedText,
+              ),
             ),
-            const SizedBox(height: 12),
+            Gaps.h12,
             Flexible(child: body),
           ],
         ),
@@ -119,7 +121,6 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
   }
 
   Widget _buildChoices(List<Subject> owned) {
-    final scheme = Theme.of(context).colorScheme;
     return RadioGroup<String>(
       groupValue: _selected,
       onChanged: (v) => setState(() {
@@ -134,12 +135,7 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
               key: ValueKey('copy-target-${s.id}'),
               value: s.id,
               contentPadding: EdgeInsets.zero,
-              secondary: CircleAvatar(
-                radius: 10,
-                backgroundColor: s.color != null
-                    ? Color(s.color!)
-                    : scheme.primaryContainer,
-              ),
+              secondary: SubjectColorDot(color: s.color),
               title: Text(
                 s.title,
                 maxLines: 1,
@@ -150,7 +146,7 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
             key: const ValueKey('copy-target-new'),
             value: _newSubject,
             contentPadding: EdgeInsets.zero,
-            secondary: const Icon(Icons.add),
+            secondary: const Icon(Icons.add, size: 18),
             title: const Text('New subject'),
             subtitle: owned.isEmpty
                 ? const Text("You don't have any subjects yet.")
@@ -167,7 +163,6 @@ class _CopyTargetDialogState extends ConsumerState<_CopyTargetDialog> {
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
                   labelText: 'Subject name',
-                  border: const OutlineInputBorder(),
                   errorText: _titleError,
                 ),
               ),
