@@ -205,7 +205,6 @@ Future<bool?> _confirmSubjectCopy(BuildContext context, String? title) {
   return showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      icon: const Icon(Icons.copy_all_outlined),
       title: const Text('Copy to my account?'),
       content: Text(
         '${title == null ? 'This subject' : '“$title”'} and all of its notes, '
@@ -239,10 +238,10 @@ class _CopyProgressDialog extends StatelessWidget {
         content: Row(
           children: [
             SizedBox.square(
-              dimension: 28,
-              child: CircularProgressIndicator(strokeWidth: 3),
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            SizedBox(width: 20),
+            SizedBox(width: 16),
             Expanded(
               child: Text('Copying to your account…\nThis may take a moment.'),
             ),

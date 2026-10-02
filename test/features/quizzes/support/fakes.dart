@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:quiz_app/ai/ai_providers.dart';
+import 'package:quiz_app/ai/ai_readiness.dart';
 import 'package:quiz_app/ai/ai_service.dart';
 import 'package:quiz_app/ai/llm_provider.dart';
 import 'package:quiz_app/core/errors/app_exception.dart';
@@ -363,7 +364,22 @@ class TestEnv {
     ),
   );
 
+  /// Whether AI entry points are unlocked (`aiReadinessProvider`).
+  bool aiReady = true;
+
   List<Override> get overrides => [
+    aiReadinessProvider.overrideWith(
+      (ref) async => aiReady
+          ? const AiReadiness(
+              isConfigured: true,
+              providerId: LlmProviderId.openai,
+              model: 'gpt-test',
+            )
+          : const AiReadiness.notReady(
+              reason: 'Add an API key in Settings to use AI.',
+              issue: AiReadinessIssue.missingApiKey,
+            ),
+    ),
     currentUserIdProvider.overrideWithValue(userId),
     quizRepositoryProvider.overrideWithValue(quizzes),
     attemptRepositoryProvider.overrideWithValue(attempts),

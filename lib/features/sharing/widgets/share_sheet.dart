@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../sharing_ui.dart';
@@ -145,7 +146,6 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        icon: const Icon(Icons.person_remove_outlined),
         title: const Text('Remove access?'),
         content: Text(
           '$name will no longer be able to view “${widget.title}”. '
@@ -183,19 +183,25 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final colors = AppColors.of(context);
     final shares = ref.watch(sharesForResourceProvider(_key));
+    final count = shares.value?.length;
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(24, widget.inDialog ? 24 : 0, 24, 16),
+      padding: EdgeInsets.fromLTRB(
+        Insets.xl,
+        widget.inDialog ? Insets.xl : 0,
+        Insets.xl,
+        Insets.lg,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(widget.type.icon, color: scheme.primary),
-              const SizedBox(width: 12),
+              Icon(widget.type.icon, size: 20, color: colors.mutedText),
+              Gaps.w12,
               Expanded(
                 child: Text(
                   'Share “${widget.title}”',
@@ -212,9 +218,12 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
                 ),
             ],
           ),
-          const SizedBox(height: 12),
-          _InfoBox(text: widget.type.shareExplanation),
-          const SizedBox(height: 20),
+          Gaps.h16,
+          InfoBanner(
+            icon: Icons.visibility_outlined,
+            message: widget.type.shareExplanation,
+          ),
+          Gaps.h24,
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -235,40 +244,46 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
                   decoration: InputDecoration(
                     labelText: 'Email address',
                     hintText: 'name@example.com',
-                    prefixIcon: const Icon(Icons.alternate_email),
-                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.alternate_email, size: 18),
                     errorText: _fieldError,
                     errorMaxLines: 3,
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              Gaps.w8,
               Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: SizedBox(
-                  height: 48,
-                  child: FilledButton.icon(
-                    key: const ValueKey('share-submit'),
-                    onPressed: _busy ? null : _share,
-                    icon: _busy
-                        ? const SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.send_outlined),
-                    label: const Text('Share'),
+                padding: const EdgeInsets.only(top: Insets.xs),
+                child: FilledButton(
+                  key: const ValueKey('share-submit'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(88, 44),
                   ),
+                  onPressed: _busy ? null : _share,
+                  child: _busy
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Share'),
                 ),
               ),
             ],
           ),
           if (_notice != null) ...[
-            const SizedBox(height: 12),
-            _Notice(text: _notice!, isError: _noticeIsError),
+            Gaps.h12,
+            InfoBanner(
+              kind: _noticeIsError
+                  ? InfoBannerKind.error
+                  : InfoBannerKind.success,
+              message: _notice!,
+              onDismiss: () => _setNotice(null),
+            ),
           ],
-          const SizedBox(height: 20),
-          Text('People with access', style: theme.textTheme.titleSmall),
-          const SizedBox(height: 4),
+          SectionHeader(
+            title: 'People with access',
+            count: count == null || count == 0 ? null : count,
+            padding: const EdgeInsets.only(top: Insets.xl, bottom: Insets.xs),
+          ),
           Flexible(
             child: switch (shares) {
               AsyncValue(:final value?, hasValue: true) => _RecipientList(
@@ -276,20 +291,27 @@ class _ShareSheetState extends ConsumerState<ShareSheet> {
                 revoking: _revoking,
                 onRevoke: _revoke,
               ),
-              AsyncValue(:final error?) => _ListMessage(
-                icon: error is NetworkException
-                    ? Icons.cloud_off_outlined
-                    : Icons.error_outline,
-                text: error is NetworkException
-                    ? "You're offline. Connect to the internet to see and "
-                          'manage who has access.'
-                    : friendlyError(error),
-                onRetry: () => ref.invalidate(sharesForResourceProvider(_key)),
+              AsyncValue(:final error?) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: Insets.sm),
+                child: InfoBanner(
+                  kind: error is NetworkException
+                      ? InfoBannerKind.warning
+                      : InfoBannerKind.error,
+                  icon: error is NetworkException
+                      ? Icons.cloud_off_outlined
+                      : null,
+                  message: error is NetworkException
+                      ? "You're offline. Connect to the internet to see and "
+                            'manage who has access.'
+                      : friendlyError(error),
+                  action: TextButton(
+                    onPressed: () =>
+                        ref.invalidate(sharesForResourceProvider(_key)),
+                    child: const Text('Retry'),
+                  ),
+                ),
               ),
-              _ => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: CircularProgressIndicator()),
-              ),
+              _ => const LoadingSkeleton(rows: 2, animate: false),
             },
           ),
         ],
@@ -312,9 +334,22 @@ class _RecipientList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (shares.isEmpty) {
-      return const _ListMessage(
-        icon: Icons.lock_outline,
-        text: 'Only you can see this. Add someone by email above.',
+      final colors = AppColors.of(context);
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: Insets.md),
+        child: Row(
+          children: [
+            Icon(Icons.lock_outline, size: 18, color: colors.faintText),
+            Gaps.w12,
+            Expanded(
+              child: Text(
+                'Only you can see this. Add someone by email above.',
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: colors.mutedText),
+              ),
+            ),
+          ],
+        ),
       );
     }
     final sorted = [...shares]
@@ -327,120 +362,33 @@ class _RecipientList extends StatelessWidget {
         final label = profileLabel(share.recipient);
         final email = profileSecondary(share.recipient);
         final busy = revoking.contains(share.id);
-        return ListTile(
+        return ListRowTile(
           key: ValueKey('recipient-${share.id}'),
-          contentPadding: EdgeInsets.zero,
-          leading: InitialsAvatar(label: label),
-          title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+          padding: const EdgeInsets.symmetric(vertical: Insets.sm),
+          revealActionsOnHover: false,
+          leading: InitialsAvatar(label: label, radius: 16),
+          title: Text(label),
           subtitle: Text(
             [?email, 'Shared ${formatShareDate(share.createdAt)}'].join(' · '),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
           ),
-          trailing: busy
-              ? const SizedBox.square(
-                  dimension: 24,
+          actions: [
+            if (busy)
+              const Padding(
+                padding: EdgeInsets.all(Insets.md),
+                child: SizedBox.square(
+                  dimension: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : IconButton(
-                  tooltip: 'Remove access',
-                  icon: const Icon(Icons.person_remove_outlined),
-                  onPressed: () => onRevoke(share),
                 ),
+              )
+            else
+              IconButton(
+                tooltip: 'Remove access',
+                icon: const Icon(Icons.person_remove_outlined),
+                onPressed: () => onRevoke(share),
+              ),
+          ],
         );
       },
-    );
-  }
-}
-
-class _InfoBox extends StatelessWidget {
-  const _InfoBox({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.visibility_outlined, size: 20, color: scheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(text, style: Theme.of(context).textTheme.bodyMedium),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Notice extends StatelessWidget {
-  const _Notice({required this.text, required this.isError});
-
-  final String text;
-  final bool isError;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final fg = isError ? scheme.onErrorContainer : scheme.onPrimaryContainer;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: isError ? scheme.errorContainer : scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.check_circle_outline,
-              size: 20,
-              color: fg,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(text, style: TextStyle(color: fg)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ListMessage extends StatelessWidget {
-  const _ListMessage({required this.icon, required this.text, this.onRetry});
-
-  final IconData icon;
-  final String text;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        children: [
-          Icon(icon, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(text, style: TextStyle(color: scheme.onSurfaceVariant)),
-          ),
-          if (onRetry != null)
-            TextButton(onPressed: onRetry, child: const Text('Retry')),
-        ],
-      ),
     );
   }
 }

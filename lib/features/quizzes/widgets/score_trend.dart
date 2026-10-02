@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/app_colors.dart';
+
 /// Minimal sparkline of attempt scores (0..100), oldest first.
 class ScoreTrend extends StatelessWidget {
   const ScoreTrend({super.key, required this.percents});
@@ -9,6 +11,7 @@ class ScoreTrend extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
     return Semantics(
       label: 'Score trend: ${percents.join('%, ')}%',
       child: CustomPaint(
@@ -16,8 +19,8 @@ class ScoreTrend extends StatelessWidget {
         painter: _TrendPainter(
           percents,
           line: scheme.primary,
-          fill: scheme.primary.withValues(alpha: 0.12),
-          grid: scheme.outlineVariant,
+          fill: scheme.primary.withValues(alpha: 0.06),
+          grid: colors.hairline,
         ),
       ),
     );
@@ -71,12 +74,12 @@ class _TrendPainter extends CustomPainter {
         Paint()
           ..color = line
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2
+          ..strokeWidth = 1.5
           ..strokeJoin = StrokeJoin.round,
       );
     final dot = Paint()..color = line;
     for (var i = 0; i < values.length; i++) {
-      canvas.drawCircle(at(i), i == values.length - 1 ? 4 : 2.5, dot);
+      canvas.drawCircle(at(i), i == values.length - 1 ? 3.5 : 2, dot);
     }
   }
 

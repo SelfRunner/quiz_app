@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../ai/ai_providers.dart';
 import '../../../core/utils/clock.dart';
+import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/models/question.dart';
 import '../domain/question_rules.dart';
 import 'question_editor.dart';
@@ -30,7 +33,9 @@ class QuestionListEditor extends StatelessWidget {
   /// Highlight invalid questions (e.g. after a failed save, or AI drafts).
   final bool showIssues;
 
-  /// When set, each question gets a "Regenerate" action.
+  /// When set, each question gets a "Regenerate" action. It is AI-gated:
+  /// while AI is not configured the action shows a lock and opens the
+  /// "Set up AI" sheet instead.
   final void Function(Question question)? onRegenerate;
 
   /// Questions currently being regenerated.
@@ -88,12 +93,13 @@ class QuestionListEditor extends StatelessWidget {
       buildDefaultDragHandles: false,
       header: header,
       footer: Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Center(
-          child: OutlinedButton.icon(
+        padding: const EdgeInsets.only(top: Insets.xs),
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton.icon(
             key: const Key('add-question'),
             onPressed: () => _add(context),
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.add, size: 18),
             label: const Text('Add question'),
           ),
         ),
@@ -109,7 +115,7 @@ class QuestionListEditor extends StatelessWidget {
         final q = questions[index];
         return Padding(
           key: ValueKey(q.id),
-          padding: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.only(bottom: Insets.sm),
           child: QuestionCard(
             index: index,
             question: q,
@@ -155,20 +161,94 @@ class QuestionCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDuplicate;
   final VoidCallback onDelete;
+
+  /// AI action; gated on AI readiness (needs a ProviderScope when set).
   final VoidCallback? onRegenerate;
+
+  void _regenerate(BuildContext context, bool aiReady, String? reason) {
+    if (aiReady) {
+      onRegenerate?.call();
+    } else {
+      showAiSetupSheet(context, reason: reason);
+    }
+  }
+
+  Widget _menu(BuildContext context, {required bool aiReady, String? reason}) {
+    final colors = AppColors.of(context);
+    return PopupMenuButton<_CardAction>(
+      tooltip: 'More actions',
+      enabled: !busy,
+      icon: const Icon(Icons.more_horiz),
+      onSelected: (a) => switch (a) {
+        _CardAction.duplicate => onDuplicate(),
+        _CardAction.regenerate => _regenerate(context, aiReady, reason),
+        _CardAction.delete => onDelete(),
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: _CardAction.duplicate,
+          child: ListTile(
+            leading: Icon(Icons.copy_outlined),
+            title: Text('Duplicate'),
+          ),
+        ),
+        if (onRegenerate != null)
+          PopupMenuItem(
+            key: const Key('question-regenerate'),
+            value: _CardAction.regenerate,
+            child: ListTile(
+              leading: const Icon(Icons.autorenew),
+              title: const Text('Regenerate'),
+              trailing: aiReady
+                  ? null
+                  : Tooltip(
+                      message: 'Set up AI in Settings to use this',
+                      child: Icon(
+                        LockedFeature.lockIcon,
+                        key: LockedFeature.badgeKey,
+                        size: 16,
+                        color: colors.mutedText,
+                      ),
+                    ),
+            ),
+          ),
+        const PopupMenuItem(
+          value: _CardAction.delete,
+          child: ListTile(
+            leading: Icon(Icons.delete_outline),
+            title: Text('Delete'),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final colors = AppColors.of(context);
     final q = question;
     final hasIssues = issues.isNotEmpty;
-    return Card(
-      elevation: 0,
+    final emptyPrompt = q.prompt.trim().isEmpty;
+    final menu = onRegenerate == null
+        ? _menu(context, aiReady: false)
+        : Consumer(
+            builder: (context, ref, _) {
+              final r = ref.watch(aiReadinessProvider).value;
+              return _menu(
+                context,
+                aiReady: r?.isConfigured ?? false,
+                reason: r?.reason,
+              );
+            },
+          );
+    return Material(
+      color: colors.card,
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: Radii.lgAll,
         side: BorderSide(
-          color: hasIssues ? scheme.error : scheme.outlineVariant,
+          color: hasIssues ? colors.danger : colors.hairline,
           width: hasIssues ? 1.5 : 1,
         ),
       ),
@@ -179,7 +259,12 @@ class QuestionCard extends StatelessWidget {
           children: [
             if (busy) const LinearProgressIndicator(minHeight: 2),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 4, 12),
+              padding: const EdgeInsets.fromLTRB(
+                Insets.sm,
+                Insets.xs,
+                Insets.xs,
+                Insets.md,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -187,122 +272,98 @@ class QuestionCard extends StatelessWidget {
                     children: [
                       ReorderableDragStartListener(
                         index: index,
-                        child: const Padding(
-                          padding: EdgeInsets.all(4),
+                        child: Padding(
+                          padding: const EdgeInsets.all(Insets.xs),
                           child: MouseRegion(
                             cursor: SystemMouseCursors.grab,
-                            child: Icon(Icons.drag_indicator, size: 20),
+                            child: Icon(
+                              Icons.drag_indicator,
+                              size: 18,
+                              color: colors.faintText,
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 4),
+                      Gaps.w4,
                       Text(
                         'Q${index + 1}',
                         style: theme.textTheme.labelLarge?.copyWith(
-                          color: scheme.primary,
+                          color: colors.mutedText,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      Gaps.w12,
+                      Icon(
+                        questionTypeIcon(q.type),
+                        size: 14,
+                        color: colors.faintText,
+                      ),
+                      Gaps.w4,
                       Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Chip(
-                            avatar: Icon(questionTypeIcon(q.type), size: 16),
-                            label: Text(
-                              questionTypeLabel(q.type),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            visualDensity: VisualDensity.compact,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
+                        child: Text(
+                          questionTypeLabel(q.type),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: colors.faintText,
                           ),
                         ),
                       ),
                       IconButton(
                         tooltip: 'Edit question',
-                        icon: const Icon(Icons.edit_outlined),
+                        icon: const Icon(Icons.edit_outlined, size: 18),
                         onPressed: busy ? null : onEdit,
                       ),
-                      PopupMenuButton<_CardAction>(
-                        tooltip: 'More actions',
-                        enabled: !busy,
-                        onSelected: (a) => switch (a) {
-                          _CardAction.duplicate => onDuplicate(),
-                          _CardAction.regenerate => onRegenerate?.call(),
-                          _CardAction.delete => onDelete(),
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: _CardAction.duplicate,
-                            child: ListTile(
-                              leading: Icon(Icons.copy_outlined),
-                              title: Text('Duplicate'),
-                            ),
-                          ),
-                          if (onRegenerate != null)
-                            const PopupMenuItem(
-                              value: _CardAction.regenerate,
-                              child: ListTile(
-                                leading: Icon(Icons.autorenew),
-                                title: Text('Regenerate'),
-                              ),
-                            ),
-                          const PopupMenuItem(
-                            value: _CardAction.delete,
-                            child: ListTile(
-                              leading: Icon(Icons.delete_outline),
-                              title: Text('Delete'),
-                            ),
-                          ),
-                        ],
-                      ),
+                      menu,
                     ],
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                    padding: const EdgeInsets.fromLTRB(
+                      Insets.sm,
+                      Insets.xxs,
+                      Insets.sm,
+                      0,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          q.prompt.trim().isEmpty
-                              ? 'No question text yet'
-                              : q.prompt,
+                          emptyPrompt ? 'No question text yet' : q.prompt,
                           style: theme.textTheme.titleMedium?.copyWith(
-                            fontStyle: q.prompt.trim().isEmpty
-                                ? FontStyle.italic
-                                : null,
+                            fontStyle: emptyPrompt ? FontStyle.italic : null,
+                            color: emptyPrompt ? colors.faintText : null,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        ..._answerPreview(theme),
+                        Gaps.h8,
+                        ..._answerPreview(theme, colors),
                         if (q.explanation != null &&
                             q.explanation!.trim().isNotEmpty) ...[
-                          const SizedBox(height: 6),
+                          Gaps.h4,
                           Text(
                             q.explanation!,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
+                              color: colors.mutedText,
                             ),
                           ),
                         ],
                         if (hasIssues) ...[
-                          const SizedBox(height: 8),
+                          Gaps.h8,
                           for (final m in issues.messages)
                             Row(
                               children: [
                                 Icon(
                                   Icons.error_outline,
                                   size: 16,
-                                  color: scheme.error,
+                                  color: colors.danger,
                                 ),
-                                const SizedBox(width: 6),
+                                Gaps.w8,
                                 Expanded(
                                   child: Text(
                                     m,
                                     style: theme.textTheme.bodySmall?.copyWith(
-                                      color: scheme.error,
+                                      color: colors.danger,
                                     ),
                                   ),
                                 ),
@@ -321,9 +382,8 @@ class QuestionCard extends StatelessWidget {
     );
   }
 
-  List<Widget> _answerPreview(ThemeData theme) {
+  List<Widget> _answerPreview(ThemeData theme, AppColors colors) {
     final q = question;
-    final scheme = theme.colorScheme;
     if (q.type == QuestionType.shortAnswer) {
       final answer = q.answerText?.trim() ?? '';
       return [
@@ -332,7 +392,7 @@ class QuestionCard extends StatelessWidget {
             children: [
               TextSpan(
                 text: 'Answer: ',
-                style: TextStyle(color: scheme.onSurfaceVariant),
+                style: TextStyle(color: colors.mutedText),
               ),
               TextSpan(
                 text: answer.isEmpty ? '—' : answer,
@@ -346,20 +406,23 @@ class QuestionCard extends StatelessWidget {
     return [
       for (var i = 0; i < q.options.length; i++)
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
+          padding: const EdgeInsets.symmetric(vertical: Insets.xxs),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                q.correctIndices.contains(i)
-                    ? Icons.check_circle
-                    : Icons.circle_outlined,
-                size: 18,
-                color: q.correctIndices.contains(i)
-                    ? Colors.green.shade600
-                    : scheme.outline,
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Icon(
+                  q.correctIndices.contains(i)
+                      ? Icons.check_circle
+                      : Icons.circle_outlined,
+                  size: 16,
+                  color: q.correctIndices.contains(i)
+                      ? colors.success
+                      : colors.faintText,
+                ),
               ),
-              const SizedBox(width: 8),
+              Gaps.w8,
               Expanded(
                 child: Text(
                   q.options[i].trim().isEmpty ? '(empty)' : q.options[i],

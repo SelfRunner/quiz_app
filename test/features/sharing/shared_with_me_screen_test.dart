@@ -64,9 +64,10 @@ void main() {
     await tester.pumpWidget(app(shares));
     await tester.pumpAndSettle();
 
-    expect(find.text('Subjects'), findsOneWidget);
-    expect(find.text('Notes'), findsOneWidget);
-    expect(find.text('Quizzes'), findsOneWidget);
+    // Section headers show the type and its count.
+    expect(find.text('Subjects  1'), findsOneWidget);
+    expect(find.text('Notes  1'), findsOneWidget);
+    expect(find.text('Quizzes  1'), findsOneWidget);
     expect(find.text('Biology'), findsOneWidget);
     expect(find.text('Cell notes'), findsOneWidget);
     expect(find.text('Cell quiz'), findsOneWidget);
@@ -78,9 +79,9 @@ void main() {
 
     // Sections are in order Subjects, Notes, Quizzes.
     final ys = [
-      'Subjects',
-      'Notes',
-      'Quizzes',
+      'Subjects  1',
+      'Notes  1',
+      'Quizzes  1',
     ].map((t) => tester.getTopLeft(find.text(t)).dy).toList();
     expect(ys, orderedEquals([...ys]..sort()));
   });

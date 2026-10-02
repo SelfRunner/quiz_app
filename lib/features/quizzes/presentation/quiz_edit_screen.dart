@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/data_providers.dart';
 import '../../../data/models/question.dart';
 import '../../../data/models/quiz.dart';
@@ -150,7 +151,7 @@ class _QuizEditScreenState extends ConsumerState<QuizEditScreen> {
     if (_original != null) {
       body = _original!.isOwnedBy(userId)
           ? _editor(context)
-          : const MessageView(
+          : const EmptyState(
               icon: Icons.lock_outline,
               title: 'Read-only quiz',
               message:
@@ -158,15 +159,21 @@ class _QuizEditScreenState extends ConsumerState<QuizEditScreen> {
                   'edit it.',
             );
     } else if (quizAsync.hasValue) {
-      body = const MessageView(icon: Icons.search_off, title: 'Quiz not found');
+      body = const NotFoundView(what: 'Quiz');
     } else if (quizAsync.hasError) {
-      body = MessageView(
+      body = EmptyState(
         icon: Icons.error_outline,
         title: 'Could not load the quiz',
         message: errorText(quizAsync.error!),
       );
     } else {
-      body = const Center(child: CircularProgressIndicator());
+      body = const ContentContainer(
+        maxWidth: ContentWidth.form,
+        child: Padding(
+          padding: EdgeInsets.only(top: Insets.xl),
+          child: LoadingSkeleton(rows: 4),
+        ),
+      );
     }
 
     final canEdit = _original?.isOwnedBy(userId) ?? false;
@@ -181,7 +188,7 @@ class _QuizEditScreenState extends ConsumerState<QuizEditScreen> {
           actions: [
             if (canEdit)
               Padding(
-                padding: const EdgeInsets.only(right: 12),
+                padding: const EdgeInsets.only(right: Insets.md),
                 child: FilledButton.icon(
                   key: const Key('save-quiz'),
                   onPressed: _saving || !_dirty ? null : _save,
@@ -203,68 +210,61 @@ class _QuizEditScreenState extends ConsumerState<QuizEditScreen> {
 
   Widget _editor(BuildContext context) {
     final theme = Theme.of(context);
-    final header = Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            key: const Key('quiz-title'),
-            controller: _title,
-            textCapitalization: TextCapitalization.sentences,
-            style: theme.textTheme.titleLarge,
-            decoration: InputDecoration(
-              labelText: 'Title',
-              errorText: _titleError,
-            ),
-            onChanged: (_) {
-              if (_titleError != null) setState(() => _titleError = null);
-              _markDirty();
-            },
+    final colors = AppColors.of(context);
+    final gutter = Breakpoints.gutter(context);
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          key: const Key('quiz-title'),
+          controller: _title,
+          textCapitalization: TextCapitalization.sentences,
+          style: theme.textTheme.titleLarge,
+          decoration: InputDecoration(
+            labelText: 'Title',
+            errorText: _titleError,
           ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const Key('quiz-description'),
-            controller: _description,
-            minLines: 1,
-            maxLines: 4,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              labelText: 'Description (optional)',
-            ),
-            onChanged: (_) => _markDirty(),
+          onChanged: (_) {
+            if (_titleError != null) setState(() => _titleError = null);
+            _markDirty();
+          },
+        ),
+        Gaps.h12,
+        TextField(
+          key: const Key('quiz-description'),
+          controller: _description,
+          minLines: 1,
+          maxLines: 4,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            labelText: 'Description (optional)',
           ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Text(
-                'Questions (${_questions.length})',
-                style: theme.textTheme.titleMedium,
-              ),
-              const SizedBox(width: 12),
-              if (_questions.length > 1)
-                Expanded(
-                  child: Text(
-                    'Drag to reorder',
-                    textAlign: TextAlign.end,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+          onChanged: (_) => _markDirty(),
+        ),
+        SectionHeader(
+          key: const Key('questions-header'),
+          title: 'Questions',
+          count: _questions.length,
+          padding: const EdgeInsets.only(top: Insets.xl, bottom: Insets.md),
+          trailing: _questions.length > 1
+              ? Text(
+                  'Drag to reorder',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.faintText,
                   ),
-                ),
-            ],
-          ),
-        ],
-      ),
+                )
+              : null,
+        ),
+      ],
     );
-    return MaxWidth(
+    return ContentContainer(
+      padding: EdgeInsets.zero,
       child: QuestionListEditor(
         questions: _questions,
         newId: ref.read(idGeneratorProvider),
         header: header,
         showIssues: _showIssues,
+        padding: EdgeInsets.fromLTRB(gutter, Insets.xl, gutter, 96),
         onChanged: (list) {
           setState(() {
             _questions = list;

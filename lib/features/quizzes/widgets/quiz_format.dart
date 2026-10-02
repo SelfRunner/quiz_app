@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/state_views.dart';
 import '../../../data/models/question.dart';
 import '../../../data/models/quiz_attempt.dart';
 
@@ -82,7 +84,8 @@ class MaxWidth extends StatelessWidget {
   );
 }
 
-/// Simple centered message with an optional action.
+/// Simple centered message with an optional action (the design system's
+/// [EmptyState]; kept for existing callers).
 class MessageView extends StatelessWidget {
   const MessageView({
     super.key,
@@ -98,33 +101,16 @@ class MessageView extends StatelessWidget {
   final Widget? action;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 48, color: theme.colorScheme.outline),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: theme.textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            if (message != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                message!,
-                style: theme.textTheme.bodyMedium,
-                textAlign: TextAlign.center,
-              ),
-            ],
-            if (action != null) ...[const SizedBox(height: 16), action!],
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      EmptyState(icon: icon, title: title, message: message, action: action);
+}
+
+/// Score color: success from 80%, warning from 50%, danger below; muted when
+/// unknown.
+Color scoreColor(BuildContext context, int? percent) {
+  final c = AppColors.of(context);
+  if (percent == null) return c.mutedText;
+  if (percent >= 80) return c.success;
+  if (percent >= 50) return c.warning;
+  return c.danger;
 }

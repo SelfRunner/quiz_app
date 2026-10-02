@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/errors/app_exception.dart';
+import '../../core/theme/app_colors.dart';
 import '../../data/models/models.dart';
 
 /// Width at which sharing UI switches to dialogs / wide layouts (matches the
@@ -101,11 +102,11 @@ class InitialsAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
     return CircleAvatar(
       radius: radius,
-      backgroundColor: scheme.secondaryContainer,
-      foregroundColor: scheme.onSecondaryContainer,
+      backgroundColor: colors.sidebar,
+      foregroundColor: colors.mutedText,
       child: Text(
         initialsOf(label),
         style: TextStyle(fontSize: radius * 0.8, fontWeight: FontWeight.w600),
