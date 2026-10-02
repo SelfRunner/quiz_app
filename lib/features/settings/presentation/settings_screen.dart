@@ -10,8 +10,10 @@ import '../../../data/data_providers.dart';
 import '../../../data/sync/sync_engine.dart';
 import '../../auth/application/sign_out.dart';
 import 'widgets/ai_settings_section.dart';
+import 'widgets/study_settings_section.dart';
 
-/// Account, AI provider, appearance, sync and "danger zone" settings.
+/// Account, AI provider, study, appearance, sync and "danger zone"
+/// settings.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -31,6 +33,11 @@ class SettingsScreen extends ConsumerWidget {
                 'Bring your own API key. It stays on this device and is sent '
                 'only to the provider you choose.',
             child: AiSettingsSection(),
+          ),
+          _Section(
+            title: 'Study',
+            subtitle: 'Flashcard scheduling. Saved on this device.',
+            child: StudySettingsSection(),
           ),
           _Section(title: 'Appearance', child: _ThemePicker()),
           _Section(title: 'Sync', child: _SyncTile()),

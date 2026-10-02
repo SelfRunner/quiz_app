@@ -32,6 +32,8 @@ Future<FakeShellSyncEngine> pumpShell(
   required Size size,
   SyncStatus status = const SyncStatus(),
   ThemeMode mode = ThemeMode.light,
+  int due = 0,
+  String location = '/shared',
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -39,12 +41,15 @@ Future<FakeShellSyncEngine> pumpShell(
   final engine = FakeShellSyncEngine(status);
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [syncEngineProvider.overrideWithValue(engine)],
+      overrides: [
+        syncEngineProvider.overrideWithValue(engine),
+        dueCountProvider.overrideWith((ref) => Stream.value(due)),
+      ],
       child: MaterialApp(
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
         themeMode: mode,
-        home: const AppShell(location: '/shared', child: Text('content')),
+        home: AppShell(location: location, child: const Text('content')),
       ),
     ),
   );
@@ -59,7 +64,8 @@ void main() {
     final engine = await pumpShell(tester, size: const Size(1280, 800));
     final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
     expect(rail.extended, isTrue);
-    expect(rail.selectedIndex, 1);
+    expect(rail.selectedIndex, 3); // Home, Subjects, Study, Shared, Settings
+    expect(rail.destinations, hasLength(5));
     expect(find.text(AppShell.appName), findsOneWidget);
     expect(find.byType(SyncStatusTile), findsOneWidget);
     expect(find.text('Not synced yet'), findsOneWidget);
@@ -93,5 +99,50 @@ void main() {
     expect(find.byType(NavigationRail), findsNothing);
     expect(find.byType(SyncStatusBanner), findsOneWidget);
     expect(find.textContaining('Offline'), findsOneWidget);
+  });
+
+  testWidgets('destinations map locations to tabs', (tester) async {
+    expect(AppShell.indexFor('/home'), 0);
+    expect(AppShell.indexFor('/'), 1);
+    expect(AppShell.indexFor('/study'), 2);
+    expect(AppShell.indexFor('/shared'), 3);
+    expect(AppShell.indexFor('/settings'), 4);
+    await pumpShell(tester, size: const Size(390, 800), location: '/home');
+    final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(bar.destinations, hasLength(5));
+    expect(bar.selectedIndex, 0);
+    for (final label in ['Home', 'Subjects', 'Study', 'Shared', 'Settings']) {
+      expect(find.text(label), findsOneWidget);
+    }
+  });
+
+  testWidgets('Study shows a badge with the due count', (tester) async {
+    await pumpShell(tester, size: const Size(390, 800), due: 7);
+    expect(find.byKey(AppShell.studyBadgeKey), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(AppShell.studyBadgeKey),
+        matching: find.text('7'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('sidebar badge caps at 99+', (tester) async {
+    await pumpShell(tester, size: const Size(1280, 800), due: 120);
+    expect(find.text('99+'), findsOneWidget);
+  });
+
+  testWidgets('no badge when nothing is due', (tester) async {
+    await pumpShell(tester, size: const Size(1280, 800));
+    expect(find.byKey(AppShell.studyBadgeKey), findsNothing);
+  });
+
+  testWidgets('sync button has one short semantics label', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await pumpShell(tester, size: const Size(800, 700));
+    expect(find.bySemanticsLabel('Sync status: Not synced'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp('Tap for details')), findsNothing);
+    semantics.dispose();
   });
 }
