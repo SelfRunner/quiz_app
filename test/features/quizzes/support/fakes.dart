@@ -13,7 +13,7 @@ import 'package:quiz_app/ai/llm_provider.dart';
 import 'package:quiz_app/core/errors/app_exception.dart';
 import 'package:quiz_app/core/providers.dart';
 import 'package:quiz_app/data/data_providers.dart';
-import 'package:quiz_app/data/models/models.dart';
+import 'package:quiz_app/data/models/models.dart' hide ChatCitation;
 import 'package:quiz_app/data/repositories/attempt_repository.dart';
 import 'package:quiz_app/data/repositories/mistake_repository.dart';
 import 'package:quiz_app/data/repositories/note_repository.dart';
