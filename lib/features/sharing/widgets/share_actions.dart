@@ -182,8 +182,7 @@ Future<String?> copySharedToMyAccount(
     ShareResourceType.subject => AppRoutes.subject(copiedId),
     ShareResourceType.note => AppRoutes.note(copiedId),
     ShareResourceType.quiz => AppRoutes.quiz(copiedId),
-    // No deck route yet (Wave 2 UI).
-    ShareResourceType.deck => AppRoutes.subjects,
+    ShareResourceType.deck => AppRoutes.deck(copiedId),
   };
   messenger?.showSnackBar(
     SnackBar(

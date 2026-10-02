@@ -13,10 +13,14 @@ import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
+import '../../decks/domain/deck_format.dart'
+    show cardIssues, cardsForSave, isBlankCard;
+import '../../decks/widgets/card_list_editor.dart';
 import '../../quizzes/domain/question_rules.dart';
 import '../../quizzes/widgets/question_list_editor.dart';
 import '../../quizzes/widgets/quiz_format.dart'
     show errorText, plural, questionTypeIcon, questionTypeLabel, showSnack;
+import '../domain/deck_generation.dart';
 import '../domain/generation_sources.dart';
 import '../widgets/ai_error_card.dart';
 import '../widgets/attachment_picker.dart';
@@ -55,8 +59,8 @@ enum NoteLength {
 const double _twoColumnWidth = 900;
 
 /// AI generation: sources (text, notes, files, YouTube) + options →
-/// progress (cancellable) → editable preview → save as a quiz (subject- or
-/// note-level) or a note. Shows only a "Set up AI" state until a provider
+/// progress (cancellable) → editable preview → save as a quiz or flashcard
+/// deck (subject- or note-level) or a note. Shows only a "Set up AI" state until a provider
 /// is configured.
 class AiGenerateScreen extends ConsumerStatefulWidget {
   const AiGenerateScreen({
@@ -94,6 +98,8 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   Difficulty _difficulty = Difficulty.medium;
   NoteStyle _noteStyle = NoteStyle.studyNotes;
   NoteLength _noteLength = NoteLength.medium;
+  int _cardCount = defaultDeckCards;
+  DeckCardStyle _deckStyle = DeckCardStyle.qa;
   String? _pickedSubjectId;
   Note? _note;
   bool _notePreselected = false;
@@ -115,6 +121,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   final _draftDescription = TextEditingController();
   final _noteBody = TextEditingController();
   List<Question> _questions = [];
+  List<Flashcard> _cards = [];
   final Set<String> _regenerating = {};
   bool _draftDirty = false;
   bool _showIssues = false;
@@ -122,6 +129,14 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   bool _saving = false;
 
   bool get _isQuiz => widget.kind == AiGenerateKind.quiz;
+  bool get _isDeck => widget.kind == AiGenerateKind.deck;
+
+  /// "quiz" / "deck" / "note".
+  String get _noun => switch (widget.kind) {
+    AiGenerateKind.quiz => 'quiz',
+    AiGenerateKind.deck => 'deck',
+    AiGenerateKind.note => 'note',
+  };
 
   @override
   void initState() {
@@ -321,6 +336,39 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
           _questions = draft.toQuestions(newId);
           _resetPreviewState();
         });
+      } else if (_isDeck) {
+        final draft = await ai.generateStructured<DeckDraft>(
+          deckGenerationRequest(
+            sources: sources,
+            count: _cardCount,
+            style: _deckStyle,
+            language: _blankToNull(_language.text),
+            topic: _topic,
+            extraInstructions: _blankToNull(_instructions.text),
+            providerId: sel.providerId,
+            model: sel.model,
+          ),
+          validate: (json) => validateDeckDraft(json, maxCards: _cardCount),
+          what: 'deck',
+        );
+        if (gen != _generation || !mounted) return;
+        final newId = ref.read(idGeneratorProvider);
+        setState(() {
+          _used = sel;
+          _usedSources = selection;
+          _draftTitle.text = draft.title;
+          _draftDescription.text = draft.description ?? '';
+          _cards = [
+            for (final c in draft.cards)
+              Flashcard(
+                id: newId(),
+                front: c.front,
+                back: c.back,
+                hint: c.hint,
+              ),
+          ];
+          _resetPreviewState();
+        });
       } else {
         final request = NoteGenerationRequest(
           sources: sources,
@@ -483,6 +531,27 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         );
         return;
       }
+    } else if (_isDeck) {
+      setState(() {
+        _draftTitleError = title.isEmpty ? 'Give the deck a title.' : null;
+        _showIssues = true;
+      });
+      if (title.isEmpty) return;
+      final cards = cardsForSave(_cards);
+      if (cards == null) {
+        final bad = _cards
+            .where((c) => !isBlankCard(c) && cardIssues(c).isNotEmpty)
+            .length;
+        showSnack(
+          context,
+          'Fill in both sides of ${plural(bad, 'card')} marked in red.',
+        );
+        return;
+      }
+      if (cards.isEmpty) {
+        showSnack(context, 'Add at least one card.');
+        return;
+      }
     } else {
       setState(() {
         _draftTitleError = title.isEmpty ? 'Give the note a title.' : null;
@@ -505,6 +574,18 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               source: _usedSources.toQuizSource(_used),
             );
         location = AppRoutes.quiz(quiz.id);
+      } else if (_isDeck) {
+        final deck = await ref
+            .read(deckRepositoryProvider)
+            .create(
+              subjectId: subjectId,
+              noteId: widget.noteId,
+              title: title,
+              description: _blankToNull(_draftDescription.text),
+              cards: cardsForSave(_cards)!,
+              source: _usedSources.toQuizSource(_used),
+            );
+        location = AppRoutes.deck(deck.id);
       } else {
         final note = await ref
             .read(noteRepositoryProvider)
@@ -520,7 +601,11 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         _draftDirty = false;
         _stage = _Stage.form;
       });
-      showSnack(context, _isQuiz ? 'Quiz saved' : 'Note saved');
+      showSnack(context, switch (widget.kind) {
+        AiGenerateKind.quiz => 'Quiz saved',
+        AiGenerateKind.deck => 'Deck saved',
+        AiGenerateKind.note => 'Note saved',
+      });
       context.pushReplacement(location);
     } on Object catch (e) {
       if (mounted) showSnack(context, errorText(e));
@@ -556,12 +641,9 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   Widget build(BuildContext context) {
     final readiness = ref.watch(aiReadinessProvider);
     final r = readiness.value;
-    final title = switch ((_isQuiz, _stage)) {
-      (true, _Stage.preview) => 'Review quiz',
-      (false, _Stage.preview) => 'Review note',
-      (true, _) => 'Generate quiz with AI',
-      (false, _) => 'Generate note with AI',
-    };
+    final title = _stage == _Stage.preview
+        ? 'Review $_noun'
+        : 'Generate ${_isDeck ? 'flashcards' : _noun} with AI';
     final Widget body;
     if (_stage == _Stage.form && r == null) {
       body = const Center(child: CircularProgressIndicator());
@@ -571,7 +653,11 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
       body = switch (_stage) {
         _Stage.form => _form(context, r!),
         _Stage.generating => _progress(context),
-        _Stage.preview => _isQuiz ? _quizPreview(context) : _notePreview(),
+        _Stage.preview => switch (widget.kind) {
+          AiGenerateKind.quiz => _quizPreview(context),
+          AiGenerateKind.deck => _deckPreview(context),
+          AiGenerateKind.note => _notePreview(),
+        },
       };
     }
     return PopScope(
@@ -922,6 +1008,8 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               ? 'Loading note…'
               : _isQuiz
               ? 'Quiz for the note "${note.title}"'
+              : _isDeck
+              ? 'Flashcards for the note "${note.title}"'
               : 'New note in the same subject as "${note.title}"',
           style: theme.textTheme.bodyMedium,
         ),
@@ -1056,6 +1144,39 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               selected: {_difficulty},
               onSelectionChanged: (s) => setState(() => _difficulty = s.first),
             ),
+          ] else if (_isDeck) ...[
+            Row(
+              children: [
+                Text('Cards', style: label),
+                const Spacer(),
+                Text(
+                  '$_cardCount',
+                  key: const Key('ai-card-count'),
+                  style: label,
+                ),
+              ],
+            ),
+            Slider(
+              key: const Key('ai-card-slider'),
+              value: _cardCount.toDouble(),
+              min: minDeckCards.toDouble(),
+              max: maxDeckCards.toDouble(),
+              divisions: maxDeckCards - minDeckCards,
+              label: '$_cardCount',
+              onChanged: (x) => setState(() => _cardCount = x.round()),
+            ),
+            Text('Card style', style: label),
+            Gaps.h8,
+            SegmentedButton<DeckCardStyle>(
+              key: const Key('ai-deck-style'),
+              showSelectedIcon: false,
+              segments: [
+                for (final s in DeckCardStyle.values)
+                  ButtonSegment(value: s, label: Text(s.label)),
+              ],
+              selected: {_deckStyle},
+              onSelectionChanged: (s) => setState(() => _deckStyle = s.first),
+            ),
           ] else ...[
             Text('Style', style: label),
             Gaps.h8,
@@ -1099,7 +1220,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
             maxLines: 4,
             decoration: InputDecoration(
               labelText: 'Focus (optional)',
-              hintText: _isQuiz
+              hintText: _isQuiz || _isDeck
                   ? 'e.g. Dates and definitions'
                   : 'e.g. Key terms and formulas',
               isDense: true,
@@ -1137,7 +1258,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
           onPressed: _generate,
           icon: const Icon(Icons.auto_awesome, size: 18),
-          label: Text(_isQuiz ? 'Generate quiz' : 'Generate note'),
+          label: Text(_isDeck ? 'Generate flashcards' : 'Generate $_noun'),
         ),
       ],
     );
@@ -1165,7 +1286,11 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               ),
               Gaps.h24,
               Text(
-                _isQuiz ? 'Generating your quiz…' : 'Writing your note…',
+                switch (widget.kind) {
+                  AiGenerateKind.quiz => 'Generating your quiz…',
+                  AiGenerateKind.deck => 'Writing your flashcards…',
+                  AiGenerateKind.note => 'Writing your note…',
+                },
                 style: theme.textTheme.titleMedium,
                 textAlign: TextAlign.center,
               ),
@@ -1272,6 +1397,65 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
     );
   }
 
+  Widget _deckPreview(BuildContext context) {
+    final theme = Theme.of(context);
+    final header = Padding(
+      padding: const EdgeInsets.only(bottom: Insets.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _previewInfo(context),
+          TextField(
+            key: const Key('draft-title'),
+            controller: _draftTitle,
+            style: theme.textTheme.titleLarge,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              labelText: 'Title',
+              errorText: _draftTitleError,
+            ),
+            onChanged: (_) => setState(() {
+              _draftDirty = true;
+              _draftTitleError = null;
+            }),
+          ),
+          Gaps.h12,
+          TextField(
+            key: const Key('draft-description'),
+            controller: _draftDescription,
+            minLines: 1,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Description (optional)',
+            ),
+            onChanged: (_) => _draftDirty = true,
+          ),
+          Gaps.h8,
+          SectionHeader(title: 'Cards', count: _cards.length),
+        ],
+      ),
+    );
+    return MaxWidth(
+      maxWidth: ContentWidth.readable,
+      child: DeckCardListEditor(
+        cards: _cards,
+        newId: ref.read(idGeneratorProvider),
+        header: header,
+        showIssues: _showIssues,
+        onChanged: (list) => setState(() {
+          _cards = list;
+          _draftDirty = true;
+        }),
+        padding: const EdgeInsets.fromLTRB(
+          Insets.lg,
+          Insets.lg,
+          Insets.lg,
+          Insets.xl,
+        ),
+      ),
+    );
+  }
+
   Widget _notePreview() => MaxWidth(
     maxWidth: 1400,
     child: NoteDraftEditor(
@@ -1332,7 +1516,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.check, size: 18),
-                      label: Text(_isQuiz ? 'Save quiz' : 'Save note'),
+                      label: Text('Save $_noun'),
                     ),
                   ],
                 ),

@@ -9,6 +9,7 @@ import '../../../core/widgets/sync_status_indicator.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../../decks/widgets/deck_list_section.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../../subjects/presentation/subject_detail_screen.dart' show MetaChip;
@@ -173,12 +174,17 @@ class _NoteView extends ConsumerWidget {
           )
         : NoteMarkdown(data: note.contentMd);
 
-    // QuizListSection brings its own "Quizzes" header and actions.
+    // QuizListSection / DeckListSection bring their own headers and actions.
     final studySections = Column(
       key: const Key('note-study-sections'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         QuizListSection(
+          subjectId: note.subjectId,
+          noteId: note.id,
+          readOnly: !isOwner,
+        ),
+        DeckListSection(
           subjectId: note.subjectId,
           noteId: note.id,
           readOnly: !isOwner,
