@@ -90,15 +90,22 @@ class LocalReviewRepository implements ReviewRepository {
     final userId = _ctx.currentUserId;
     if (userId == null) return Stream.value(const DueQueue());
     return watchQuery(
-      [_ctx.db.decks.box, _ctx.db.reviews.box],
-      () => buildDueQueue(
-        decks: _ctx.db.decks.where((_) => true),
-        reviews: _ownLive(userId),
-        now: now ?? _ctx.clock(),
-        newCardsPerDay: _settings().newCardsPerDay,
-        deckId: deckId,
-        toLocal: toLocal,
-      ),
+      [_ctx.db.decks.box, _ctx.db.reviews.box, _ctx.db.subjects.box],
+      () {
+        // The global queue skips decks of archived subjects; a deck's own
+        // queue (deckId) stays available.
+        final archived = archivedSubjectIds(_ctx.db);
+        return buildDueQueue(
+          decks: _ctx.db.decks.where(
+            (d) => d.id == deckId || !archived.contains(d.subjectId),
+          ),
+          reviews: _ownLive(userId),
+          now: now ?? _ctx.clock(),
+          newCardsPerDay: _settings().newCardsPerDay,
+          deckId: deckId,
+          toLocal: toLocal,
+        );
+      },
       equals: (a, b) => a == b,
     );
   }

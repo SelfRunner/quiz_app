@@ -14,13 +14,16 @@ class LocalSubjectRepository implements SubjectRepository {
   Stream<List<Subject>> watchAll() {
     final userId = _ctx.currentUserId;
     if (userId == null) return Stream.value(const []);
+    // Archived subjects are hidden (OrganizationRepository.watchSubjects
+    // lists them); pinned ones come first.
     return _ctx.db.subjects.watchWhere(
-      (s) => s.ownerId == userId,
+      (s) => s.ownerId == userId && s.archivedAt == null,
       compare: _byTitle,
     );
   }
 
   static int _byTitle(Subject a, Subject b) {
+    if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
     final c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
     return c != 0 ? c : a.id.compareTo(b.id);
   }

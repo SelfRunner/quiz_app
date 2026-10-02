@@ -231,6 +231,24 @@ class SyncMetaStore {
           jsonEncode([for (final c in changes) c.toJson()]),
         );
 
+  /// Ids of chat messages saved locally only (streaming drafts, not queued
+  /// for push yet).
+  Set<String> get chatDraftIds {
+    final raw = box.get(_chatDraftsKey);
+    if (raw == null) return <String>{};
+    try {
+      return (jsonDecode(raw) as List<dynamic>).cast<String>().toSet();
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  Future<void> setChatDraftIds(Set<String> ids) => ids.isEmpty
+      ? box.delete(_chatDraftsKey)
+      : box.put(_chatDraftsKey, jsonEncode(ids.toList()..sort()));
+
+  static const String _chatDraftsKey = 'chat_drafts';
+
   Future<void> clear() => box.clear();
 
   DateTime? _date(String key) {

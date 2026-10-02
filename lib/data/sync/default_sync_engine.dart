@@ -739,6 +739,8 @@ class DefaultSyncEngine implements SyncEngine {
         SyncTables.decks => 'a flashcard deck',
         SyncTables.cardReviews => 'a flashcard review',
         SyncTables.mistakes => 'a mistake',
+        SyncTables.chats => 'a chat',
+        SyncTables.chatMessages => 'a chat message',
         _ => 'an item',
       },
     };

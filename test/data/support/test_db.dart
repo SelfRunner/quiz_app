@@ -52,6 +52,8 @@ class TestHive {
     decksBox: await Hive.openBox<String>('decks$suffix'),
     cardReviewsBox: await Hive.openBox<String>('card_reviews$suffix'),
     mistakesBox: await Hive.openBox<String>('mistakes$suffix'),
+    chatsBox: await Hive.openBox<String>('chats$suffix'),
+    chatMessagesBox: await Hive.openBox<String>('chat_messages$suffix'),
     outboxBox: await Hive.openBox<String>('outbox$suffix'),
     syncMetaBox: await Hive.openBox<String>('sync_meta$suffix'),
     images: HiveImageCache(

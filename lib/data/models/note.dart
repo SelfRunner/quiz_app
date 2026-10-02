@@ -15,6 +15,12 @@ abstract class Note with _$Note implements Syncable {
     required String ownerId,
     required String title,
     @Default('') String contentMd,
+
+    /// Normalized tags (see `normalizeTags`), owner's values (Wave 3).
+    @Default(<String>[]) List<String> tags,
+
+    /// Pinned to the top of lists (owner's value, Wave 3).
+    @Default(false) bool pinned,
     required DateTime createdAt,
     required DateTime updatedAt,
     DateTime? deletedAt,

@@ -4,7 +4,9 @@ import '../models/subject.dart';
 /// the outbox, then sync pushes them. Streams emit immediately and again on
 /// every local change; soft-deleted rows are excluded.
 abstract interface class SubjectRepository {
-  /// Subjects owned by the current user, sorted by title (case-insensitive).
+  /// Active (not archived) subjects owned by the current user, pinned
+  /// first, then by title (case-insensitive). Archived ones: see
+  /// `OrganizationRepository.watchSubjects`.
   Stream<List<Subject>> watchAll();
 
   /// Any locally cached subject (own or shared). Emits null if missing or

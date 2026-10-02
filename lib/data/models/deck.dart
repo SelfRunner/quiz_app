@@ -42,6 +42,12 @@ abstract class Deck with _$Deck implements Syncable {
     /// Provenance of an AI-generated deck (same shape as quizzes).
     QuizSource? source,
     @Default(<Flashcard>[]) List<Flashcard> cards,
+
+    /// Normalized tags (see `normalizeTags`), owner's values (Wave 3).
+    @Default(<String>[]) List<String> tags,
+
+    /// Pinned to the top of lists (owner's value, Wave 3).
+    @Default(false) bool pinned,
     required DateTime createdAt,
     required DateTime updatedAt,
     DateTime? deletedAt,

@@ -20,6 +20,12 @@ abstract class Quiz with _$Quiz implements Syncable {
     String? description,
     QuizSource? source,
     @Default(<Question>[]) List<Question> questions,
+
+    /// Normalized tags (see `normalizeTags`), owner's values (Wave 3).
+    @Default(<String>[]) List<String> tags,
+
+    /// Pinned to the top of lists (owner's value, Wave 3).
+    @Default(false) bool pinned,
     required DateTime createdAt,
     required DateTime updatedAt,
     DateTime? deletedAt,

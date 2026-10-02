@@ -21,6 +21,10 @@ _Quiz _$QuizFromJson(Map<String, dynamic> json) => _Quiz(
           ?.map((e) => Question.fromJson(e as Map<String, dynamic>))
           .toList() ??
       const <Question>[],
+  tags:
+      (json['tags'] as List<dynamic>?)?.map((e) => e as String).toList() ??
+      const <String>[],
+  pinned: json['pinned'] as bool? ?? false,
   createdAt: DateTime.parse(json['created_at'] as String),
   updatedAt: DateTime.parse(json['updated_at'] as String),
   deletedAt: json['deleted_at'] == null
@@ -37,6 +41,8 @@ Map<String, dynamic> _$QuizToJson(_Quiz instance) => <String, dynamic>{
   'description': instance.description,
   'source': instance.source?.toJson(),
   'questions': instance.questions.map((e) => e.toJson()).toList(),
+  'tags': instance.tags,
+  'pinned': instance.pinned,
   'created_at': instance.createdAt.toIso8601String(),
   'updated_at': instance.updatedAt.toIso8601String(),
   'deleted_at': instance.deletedAt?.toIso8601String(),

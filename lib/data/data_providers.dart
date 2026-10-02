@@ -14,20 +14,24 @@ import 'remote/supabase_remote_data_source.dart';
 import 'repositories/attachment_repository.dart';
 import 'repositories/attempt_repository.dart';
 import 'repositories/auth_repository.dart';
+import 'repositories/chat_repository.dart';
 import 'repositories/deck_repository.dart';
 import 'repositories/image_store.dart';
 import 'repositories/local_attachment_repository.dart';
 import 'repositories/local_attempt_repository.dart';
+import 'repositories/local_chat_repository.dart';
 import 'repositories/local_deck_repository.dart';
 import 'repositories/local_image_store.dart';
 import 'repositories/local_mistake_repository.dart';
 import 'repositories/local_note_repository.dart';
+import 'repositories/local_organization_repository.dart';
 import 'repositories/local_quiz_repository.dart';
 import 'repositories/local_review_repository.dart';
 import 'repositories/local_subject_repository.dart';
 import 'repositories/mistake_repository.dart';
 import 'repositories/note_repository.dart';
 import 'repositories/note_search.dart';
+import 'repositories/organization_repository.dart';
 import 'repositories/quiz_repository.dart';
 import 'repositories/repository_support.dart';
 import 'repositories/review_repository.dart';
@@ -159,6 +163,16 @@ final attachmentRepositoryProvider = Provider<AttachmentRepository>(
 /// Flashcard decks (own + shared).
 final deckRepositoryProvider = Provider<DeckRepository>(
   (ref) => LocalDeckRepository(ref.watch(dataContextProvider)),
+);
+
+/// The user's private AI chats (Wave 3).
+final chatRepositoryProvider = Provider<ChatRepository>(
+  (ref) => LocalChatRepository(ref.watch(dataContextProvider)),
+);
+
+/// Tags, pin, archive and filtered / sorted lists (Wave 3).
+final organizationRepositoryProvider = Provider<OrganizationRepository>(
+  (ref) => LocalOrganizationRepository(ref.watch(dataContextProvider)),
 );
 
 /// The user's flashcard review state (FSRS), scheduled with the current
@@ -392,6 +406,81 @@ final openMistakesProvider = StreamProvider.autoDispose<List<MistakeGroup>>(
 final openMistakeCountProvider = StreamProvider.autoDispose<int>(
   (ref) => ref.watch(mistakeRepositoryProvider).watchOpenCount(),
 );
+
+// --- AI chats (Wave 3) --------------------------------------------------------
+
+/// Every chat of the current user, most recently active first.
+final chatsProvider = StreamProvider.autoDispose<List<Chat>>(
+  (ref) => ref.watch(chatRepositoryProvider).watchAll(),
+);
+
+/// Chats about one scope (`general`: `id` null), most recent first.
+final chatsByScopeProvider = StreamProvider.autoDispose
+    .family<List<Chat>, ({ChatScopeType type, String? id})>(
+      (ref, scope) =>
+          ref.watch(chatRepositoryProvider).watchByScope(scope.type, scope.id),
+    );
+
+final chatProvider = StreamProvider.autoDispose.family<Chat?, String>(
+  (ref, id) => ref.watch(chatRepositoryProvider).watchById(id),
+);
+
+/// Messages of a chat, oldest first (streaming drafts included).
+final chatMessagesProvider = StreamProvider.autoDispose
+    .family<List<ChatMessage>, String>(
+      (ref, chatId) => ref.watch(chatRepositoryProvider).watchMessages(chatId),
+    );
+
+// --- Organization (Wave 3) ----------------------------------------------------
+
+/// Subjects filtered / sorted by [SubjectListQuery] (e.g.
+/// `SubjectListQuery(archive: ArchiveFilter.archived)` for the archive).
+final subjectListProvider = StreamProvider.autoDispose
+    .family<List<Subject>, SubjectListQuery>(
+      (ref, query) =>
+          ref.watch(organizationRepositoryProvider).watchSubjects(query),
+    );
+
+/// The user's archived subjects, by name.
+final archivedSubjectsProvider = StreamProvider.autoDispose<List<Subject>>(
+  (ref) => ref
+      .watch(organizationRepositoryProvider)
+      .watchSubjects(const SubjectListQuery(archive: ArchiveFilter.archived)),
+);
+
+/// Notes / quizzes / decks filtered (subject, note, tags, pinned, owned,
+/// archived) and sorted (recent, name, created; pinned first).
+final noteListProvider = StreamProvider.autoDispose
+    .family<List<Note>, ItemListQuery>(
+      (ref, query) =>
+          ref.watch(organizationRepositoryProvider).watchNotes(query),
+    );
+
+final quizListProvider = StreamProvider.autoDispose
+    .family<List<Quiz>, ItemListQuery>(
+      (ref, query) =>
+          ref.watch(organizationRepositoryProvider).watchQuizzes(query),
+    );
+
+final deckListProvider = StreamProvider.autoDispose
+    .family<List<Deck>, ItemListQuery>(
+      (ref, query) =>
+          ref.watch(organizationRepositoryProvider).watchDecks(query),
+    );
+
+/// Every tag in use on readable notes / quizzes / decks (outside archived
+/// subjects), with counts, most used first.
+final allTagsProvider = StreamProvider.autoDispose<List<TagCount>>(
+  (ref) => ref.watch(organizationRepositoryProvider).watchTags(),
+);
+
+/// Tags in use for one kind and/or subject (null = all).
+final tagCountsProvider = StreamProvider.autoDispose
+    .family<List<TagCount>, ({TaggableKind? kind, String? subjectId})>(
+      (ref, key) => ref
+          .watch(organizationRepositoryProvider)
+          .watchTags(kind: key.kind, subjectId: key.subjectId),
+    );
 
 /// Shares the current user received. `ref.invalidate` to refresh.
 final sharedWithMeProvider = FutureProvider.autoDispose<List<Share>>(

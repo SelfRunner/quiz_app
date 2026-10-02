@@ -17,7 +17,10 @@ T _$identity<T>(T value) => value;
 mixin _$Subject {
 
  String get id; String get ownerId; String get title; String? get description;/// ARGB32 color value (e.g. `0xFF3F51B5`), stored as `bigint`.
- int? get color; DateTime get createdAt; DateTime get updatedAt; DateTime? get deletedAt;
+ int? get color;/// Pinned to the top of lists (owner's value, Wave 3).
+ bool get pinned;/// Archived (hidden from default lists, the dashboard and the study
+/// queue, still accessible); null = active (Wave 3).
+ DateTime? get archivedAt; DateTime get createdAt; DateTime get updatedAt; DateTime? get deletedAt;
 /// Create a copy of Subject
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -31,20 +34,20 @@ $SubjectCopyWith<Subject> get copyWith => _$SubjectCopyWithImpl<Subject>(this as
 @override
 bool operator ==(Object other) {
   final _this = this as Subject;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Subject&&(identical(other.id, _this.id) || other.id == _this.id)&&(identical(other.ownerId, _this.ownerId) || other.ownerId == _this.ownerId)&&(identical(other.title, _this.title) || other.title == _this.title)&&(identical(other.description, _this.description) || other.description == _this.description)&&(identical(other.color, _this.color) || other.color == _this.color)&&(identical(other.createdAt, _this.createdAt) || other.createdAt == _this.createdAt)&&(identical(other.updatedAt, _this.updatedAt) || other.updatedAt == _this.updatedAt)&&(identical(other.deletedAt, _this.deletedAt) || other.deletedAt == _this.deletedAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Subject&&(identical(other.id, _this.id) || other.id == _this.id)&&(identical(other.ownerId, _this.ownerId) || other.ownerId == _this.ownerId)&&(identical(other.title, _this.title) || other.title == _this.title)&&(identical(other.description, _this.description) || other.description == _this.description)&&(identical(other.color, _this.color) || other.color == _this.color)&&(identical(other.pinned, _this.pinned) || other.pinned == _this.pinned)&&(identical(other.archivedAt, _this.archivedAt) || other.archivedAt == _this.archivedAt)&&(identical(other.createdAt, _this.createdAt) || other.createdAt == _this.createdAt)&&(identical(other.updatedAt, _this.updatedAt) || other.updatedAt == _this.updatedAt)&&(identical(other.deletedAt, _this.deletedAt) || other.deletedAt == _this.deletedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as Subject;
-  return Object.hash(runtimeType,_this.id,_this.ownerId,_this.title,_this.description,_this.color,_this.createdAt,_this.updatedAt,_this.deletedAt);
+  return Object.hash(runtimeType,_this.id,_this.ownerId,_this.title,_this.description,_this.color,_this.pinned,_this.archivedAt,_this.createdAt,_this.updatedAt,_this.deletedAt);
 }
 
 @override
 String toString() {
   final _this = this as Subject;
-  return 'Subject(id: ${_this.id}, ownerId: ${_this.ownerId}, title: ${_this.title}, description: ${_this.description}, color: ${_this.color}, createdAt: ${_this.createdAt}, updatedAt: ${_this.updatedAt}, deletedAt: ${_this.deletedAt})';
+  return 'Subject(id: ${_this.id}, ownerId: ${_this.ownerId}, title: ${_this.title}, description: ${_this.description}, color: ${_this.color}, pinned: ${_this.pinned}, archivedAt: ${_this.archivedAt}, createdAt: ${_this.createdAt}, updatedAt: ${_this.updatedAt}, deletedAt: ${_this.deletedAt})';
 }
 
 
@@ -55,7 +58,7 @@ abstract mixin class $SubjectCopyWith<$Res>  {
   factory $SubjectCopyWith(Subject value, $Res Function(Subject) _then) = _$SubjectCopyWithImpl;
 @useResult
 $Res call({
- String id, String ownerId, String title, String? description, int? color, DateTime createdAt, DateTime updatedAt, DateTime? deletedAt
+ String id, String ownerId, String title, String? description, int? color, bool pinned, DateTime? archivedAt, DateTime createdAt, DateTime updatedAt, DateTime? deletedAt
 });
 
 
@@ -72,14 +75,16 @@ class _$SubjectCopyWithImpl<$Res>
 
 /// Create a copy of Subject
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? ownerId = null,Object? title = null,Object? description = freezed,Object? color = freezed,Object? createdAt = null,Object? updatedAt = null,Object? deletedAt = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? ownerId = null,Object? title = null,Object? description = freezed,Object? color = freezed,Object? pinned = null,Object? archivedAt = freezed,Object? createdAt = null,Object? updatedAt = null,Object? deletedAt = freezed,}) {
   return _then(Subject(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,ownerId: null == ownerId ? _self.ownerId : ownerId // ignore: cast_nullable_to_non_nullable
 as String,title: null == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
 as String,description: freezed == description ? _self.description : description // ignore: cast_nullable_to_non_nullable
 as String?,color: freezed == color ? _self.color : color // ignore: cast_nullable_to_non_nullable
-as int?,createdAt: null == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable
+as int?,pinned: null == pinned ? _self.pinned : pinned // ignore: cast_nullable_to_non_nullable
+as bool,archivedAt: freezed == archivedAt ? _self.archivedAt : archivedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,createdAt: null == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable
 as DateTime,updatedAt: null == updatedAt ? _self.updatedAt : updatedAt // ignore: cast_nullable_to_non_nullable
 as DateTime,deletedAt: freezed == deletedAt ? _self.deletedAt : deletedAt // ignore: cast_nullable_to_non_nullable
 as DateTime?,
@@ -167,10 +172,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String ownerId,  String title,  String? description,  int? color,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String ownerId,  String title,  String? description,  int? color,  bool pinned,  DateTime? archivedAt,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _Subject() when $default != null:
-return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
+return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.pinned,_that.archivedAt,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
   return orElse();
 
 }
@@ -188,10 +193,10 @@ return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String ownerId,  String title,  String? description,  int? color,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String ownerId,  String title,  String? description,  int? color,  bool pinned,  DateTime? archivedAt,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)  $default,) {final _that = this;
 switch (_that) {
 case _Subject():
-return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
+return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.pinned,_that.archivedAt,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -208,10 +213,10 @@ return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String ownerId,  String title,  String? description,  int? color,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String ownerId,  String title,  String? description,  int? color,  bool pinned,  DateTime? archivedAt,  DateTime createdAt,  DateTime updatedAt,  DateTime? deletedAt)?  $default,) {final _that = this;
 switch (_that) {
 case _Subject() when $default != null:
-return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
+return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color,_that.pinned,_that.archivedAt,_that.createdAt,_that.updatedAt,_that.deletedAt);case _:
   return null;
 
 }
@@ -223,7 +228,7 @@ return $default(_that.id,_that.ownerId,_that.title,_that.description,_that.color
 @JsonSerializable()
 
 class _Subject implements Subject {
-  const _Subject({required this.id, required this.ownerId, required this.title, this.description, this.color, required this.createdAt, required this.updatedAt, this.deletedAt});
+  const _Subject({required this.id, required this.ownerId, required this.title, this.description, this.color, this.pinned = false, this.archivedAt, required this.createdAt, required this.updatedAt, this.deletedAt});
   factory _Subject.fromJson(Map<String, dynamic> json) => _$SubjectFromJson(json);
 
 @override final  String id;
@@ -232,6 +237,11 @@ class _Subject implements Subject {
 @override final  String? description;
 /// ARGB32 color value (e.g. `0xFF3F51B5`), stored as `bigint`.
 @override final  int? color;
+/// Pinned to the top of lists (owner's value, Wave 3).
+@override@JsonKey() final  bool pinned;
+/// Archived (hidden from default lists, the dashboard and the study
+/// queue, still accessible); null = active (Wave 3).
+@override final  DateTime? archivedAt;
 @override final  DateTime createdAt;
 @override final  DateTime updatedAt;
 @override final  DateTime? deletedAt;
@@ -249,18 +259,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _Subject&&(identical(other.id, id) || other.id == id)&&(identical(other.ownerId, ownerId) || other.ownerId == ownerId)&&(identical(other.title, title) || other.title == title)&&(identical(other.description, description) || other.description == description)&&(identical(other.color, color) || other.color == color)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt)&&(identical(other.deletedAt, deletedAt) || other.deletedAt == deletedAt));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _Subject&&(identical(other.id, id) || other.id == id)&&(identical(other.ownerId, ownerId) || other.ownerId == ownerId)&&(identical(other.title, title) || other.title == title)&&(identical(other.description, description) || other.description == description)&&(identical(other.color, color) || other.color == color)&&(identical(other.pinned, pinned) || other.pinned == pinned)&&(identical(other.archivedAt, archivedAt) || other.archivedAt == archivedAt)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt)&&(identical(other.deletedAt, deletedAt) || other.deletedAt == deletedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,id,ownerId,title,description,color,createdAt,updatedAt,deletedAt);
+    return Object.hash(runtimeType,id,ownerId,title,description,color,pinned,archivedAt,createdAt,updatedAt,deletedAt);
 }
 
 @override
 String toString() {
-    return 'Subject(id: $id, ownerId: $ownerId, title: $title, description: $description, color: $color, createdAt: $createdAt, updatedAt: $updatedAt, deletedAt: $deletedAt)';
+    return 'Subject(id: $id, ownerId: $ownerId, title: $title, description: $description, color: $color, pinned: $pinned, archivedAt: $archivedAt, createdAt: $createdAt, updatedAt: $updatedAt, deletedAt: $deletedAt)';
 }
 
 
@@ -271,7 +281,7 @@ abstract mixin class _$SubjectCopyWith<$Res> implements $SubjectCopyWith<$Res> {
   factory _$SubjectCopyWith(_Subject value, $Res Function(_Subject) _then) = __$SubjectCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String ownerId, String title, String? description, int? color, DateTime createdAt, DateTime updatedAt, DateTime? deletedAt
+ String id, String ownerId, String title, String? description, int? color, bool pinned, DateTime? archivedAt, DateTime createdAt, DateTime updatedAt, DateTime? deletedAt
 });
 
 
@@ -288,14 +298,16 @@ class __$SubjectCopyWithImpl<$Res>
 
 /// Create a copy of Subject
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? ownerId = null,Object? title = null,Object? description = freezed,Object? color = freezed,Object? createdAt = null,Object? updatedAt = null,Object? deletedAt = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? ownerId = null,Object? title = null,Object? description = freezed,Object? color = freezed,Object? pinned = null,Object? archivedAt = freezed,Object? createdAt = null,Object? updatedAt = null,Object? deletedAt = freezed,}) {
   return _then(_Subject(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,ownerId: null == ownerId ? _self.ownerId : ownerId // ignore: cast_nullable_to_non_nullable
 as String,title: null == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
 as String,description: freezed == description ? _self.description : description // ignore: cast_nullable_to_non_nullable
 as String?,color: freezed == color ? _self.color : color // ignore: cast_nullable_to_non_nullable
-as int?,createdAt: null == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable
+as int?,pinned: null == pinned ? _self.pinned : pinned // ignore: cast_nullable_to_non_nullable
+as bool,archivedAt: freezed == archivedAt ? _self.archivedAt : archivedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,createdAt: null == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable
 as DateTime,updatedAt: null == updatedAt ? _self.updatedAt : updatedAt // ignore: cast_nullable_to_non_nullable
 as DateTime,deletedAt: freezed == deletedAt ? _self.deletedAt : deletedAt // ignore: cast_nullable_to_non_nullable
 as DateTime?,

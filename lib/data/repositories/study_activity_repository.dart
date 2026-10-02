@@ -30,14 +30,20 @@ class LocalStudyActivityRepository implements StudyActivityRepository {
         db.reviews.box,
         db.mistakes.box,
       ],
-      () => StudySnapshot(
-        subjects: db.subjects.where((_) => true),
-        quizzes: db.quizzes.where((_) => true),
-        decks: db.decks.where((_) => true),
-        attempts: db.attempts.where((a) => a.ownerId == userId),
-        reviews: db.reviews.where((r) => r.ownerId == userId),
-        mistakes: db.mistakes.where((m) => m.ownerId == userId),
-      ),
+      () {
+        // Archived subjects (and their quizzes / decks) are hidden from the
+        // dashboard; the user's attempts and reviews still count for the
+        // streak and totals.
+        final archived = archivedSubjectIds(db);
+        return StudySnapshot(
+          subjects: db.subjects.where((s) => !archived.contains(s.id)),
+          quizzes: db.quizzes.where((q) => !archived.contains(q.subjectId)),
+          decks: db.decks.where((d) => !archived.contains(d.subjectId)),
+          attempts: db.attempts.where((a) => a.ownerId == userId),
+          reviews: db.reviews.where((r) => r.ownerId == userId),
+          mistakes: db.mistakes.where((m) => m.ownerId == userId),
+        );
+      },
       // Snapshots are rebuilt only after a change; always emit.
       equals: (a, b) => false,
     );

@@ -12,6 +12,10 @@ _Subject _$SubjectFromJson(Map<String, dynamic> json) => _Subject(
   title: json['title'] as String,
   description: json['description'] as String?,
   color: (json['color'] as num?)?.toInt(),
+  pinned: json['pinned'] as bool? ?? false,
+  archivedAt: json['archived_at'] == null
+      ? null
+      : DateTime.parse(json['archived_at'] as String),
   createdAt: DateTime.parse(json['created_at'] as String),
   updatedAt: DateTime.parse(json['updated_at'] as String),
   deletedAt: json['deleted_at'] == null
@@ -25,6 +29,8 @@ Map<String, dynamic> _$SubjectToJson(_Subject instance) => <String, dynamic>{
   'title': instance.title,
   'description': instance.description,
   'color': instance.color,
+  'pinned': instance.pinned,
+  'archived_at': instance.archivedAt?.toIso8601String(),
   'created_at': instance.createdAt.toIso8601String(),
   'updated_at': instance.updatedAt.toIso8601String(),
   'deleted_at': instance.deletedAt?.toIso8601String(),
