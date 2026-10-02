@@ -109,6 +109,7 @@ properties required, nullables as `type: [x, 'null']`,
 - Storage bucket `note-images`, object path `{owner_id}/{note_id}/{uuid}.{ext}`.
 - `attachments(...)` + Storage bucket `attachments`: see *Attachments* below.
 - `decks`, `card_reviews`, `mistakes`, `copy_deck`, exam-mode columns on `quiz_attempts`: see *Study (Wave 2)* below.
+- `chats`, `chat_messages`, `tags`/`pinned` on notes/quizzes/decks, `pinned`/`archived_at` on subjects: see *Wave 3 schema* below.
 
 ### Attachments (backend: `supabase/migrations/20261004000000_attachments.sql`)
 
@@ -463,6 +464,92 @@ hard-deleted, or the row was never accepted); rows the server keeps (access
 revoked) stay hidden. `copyToMyAccount(resourceType: ShareResourceType.deck,
 resourceId:, targetSubjectId:, targetNoteId?)` calls `copy_deck`. Share rows
 of unknown resource types are ignored by `sharedWithMe` / `listSharesFor`.
+
+### Wave 3 schema (backend: `supabase/migrations/20261006000000_wave3.sql`)
+
+**AI chats** — `chats` and `chat_messages` are synced tables with the usual
+conventions (client `id` uuid v4 + `created_at`; `owner_id` defaults to
+`auth.uid()`, immutable `42501`; `updated_at` = server `now()`, keyset
+cursor; soft delete via `deleted_at`; upsert `onConflict: 'id'`). They are
+**private**: every operation is owner-only, they are never shared (no share
+resource type), and recipients of a shared subject/note never see the
+owner's chats (nor the owner theirs). The server only ever returns the
+caller's own rows (including own tombstones), so no reconciliation is needed.
+
+Table `public.chats`:
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | client-generated |
+| `owner_id` | uuid not null default `auth.uid()` | immutable |
+| `scope_type` | text not null default `'general'` | `subject`, `note`, `attachment` or `general`; **immutable** (`42501`) |
+| `scope_id` | uuid null | the subject / note / attachment id; **null iff `general`**; **immutable** (`42501`); no FK (the chat survives a hard delete of its scope) |
+| `title` | text not null default `''` | ≤ 500 chars |
+| `provider` | text null | AI provider name (e.g. `ProviderId` JSON), ≤ 255 chars |
+| `model` | text null | model id, ≤ 255 chars |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | as other synced tables |
+
+INSERT also requires the scope to be readable by the caller, else `42501`:
+`general` → no scope; `subject` → `can_read_subject(scope_id)`; `note` →
+`can_read_note(scope_id)`; `attachment` → `can_read_attachment(scope_id)`
+(owner, or a live attachment of a subject the caller can read — subject
+shares only). Malformed scopes (unknown type, `general` with an id, scoped
+without one) are also `42501` through the API (RLS runs before the CHECK).
+Owners may create chats on their own soft-deleted items (offline sync);
+recipients only on live, shared ones.
+
+Table `public.chat_messages`:
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | client-generated |
+| `chat_id` | uuid not null → chats (on delete cascade) | chat must exist (`23503`: push the chat first / defer) and be owned by the caller (`42501`); **immutable** (`42501`) |
+| `owner_id` | uuid not null default `auth.uid()` | immutable |
+| `role` | text not null | `user`, `assistant` or `system` (`23514`) |
+| `content` | text not null default `''` | ≤ 200 000 chars (`23514`) |
+| `citations` | jsonb not null default `[]` | array of `{"type": text 1..64, "id": text 1..255, "title": text, "snippet"?: text \| null}`; extra keys allowed (`23514` otherwise) |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | order messages by `created_at` (then `id`) |
+
+Citation `type` is free text; suggested values `subject`, `note`,
+`attachment`, `quiz`, `deck`, `web`; `id` is the cited row's uuid (or a URL
+for `web`).
+
+Sync / lifecycle notes:
+1. Add `chats`, `chat_messages` to the synced tables (own cursors). Push a
+   chat before its messages (FIFO outbox).
+2. Soft-deleting a chat does **not** cascade on the server: also push
+   tombstones for its messages (or ignore/purge messages of a deleted chat
+   locally). A hard delete of a chat cascades to its messages.
+3. When the scope becomes unreadable (share revoked, scope soft-/hard-deleted)
+   the user keeps the chat and may keep adding messages to it; only new chats
+   on that scope fail (`42501`: drop the outbox op). Show such chats as
+   "source unavailable" (the AI can no longer read the source content).
+4. Errors: `42501` (not owner, unreadable scope, immutable column), `23514`
+   (bad role / citations / lengths), `23503` (chat not synced yet: defer).
+
+**Organization columns** (additive, defaulted; older clients that omit them
+in upserts leave them untouched):
+
+| Table | Column | Type | Rules |
+|---|---|---|---|
+| `notes`, `quizzes`, `decks` | `tags` | text[] not null default `'{}'` | ≤ 50 tags, each non-blank, ≤ 64 chars, no nulls (`23514`); normalize client-side (trim, lowercase, dedupe) |
+| `notes`, `quizzes`, `decks` | `pinned` | boolean not null default false | |
+| `subjects` | `pinned` | boolean not null default false | |
+| `subjects` | `archived_at` | timestamptz null | null = active; set to archive, null again to unarchive |
+
+Subjects have no `tags`. GIN indexes exist on `tags` (server filters
+`tags=cs.{x}` / `tags=ov.{x,y}`), but search/sort/filter is expected to run on
+the local cache. These are properties of the row, i.e. the **owner's**
+values: only the owner can change them (a recipient's update is a silent
+no-op, as for any shared row), and recipients see the owner's tags / pin /
+archive state read-only. A personal per-user pin or archive of items shared
+with me is **out of scope** (would need a per-user table); the client may
+keep such preferences locally only. Archiving does not affect sharing,
+access or copying; `deleted_at` stays the only "trash".
+
+**Copies**: `copy_subject`, `copy_note`, `copy_quiz`, `copy_deck` copy
+`tags` of every copied note/quiz/deck. `pinned` and `archived_at` are not
+copied (copies start unpinned and unarchived). Chats are never copied.
 
 ## Local storage (`lib/data/local/hive_boxes.dart`)
 

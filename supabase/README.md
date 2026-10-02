@@ -13,9 +13,10 @@ supabase/
     20261003000000_hardening.sql      confirmed-email sharing, soft-delete hardening
     20261004000000_attachments.sql    subject attachments (table, RLS, bucket, copy_subject)
     20261005000000_study.sql          decks, card_reviews, mistakes, exam-mode attempt columns
+    20261006000000_wave3.sql          AI chats (private), tags / pinned / archived_at, copy_* keep tags
   tests/
     01_rls.sql  02_rpc.sql  03_storage.sql  04_hardening.sql  05_attachments.sql
-    06_study.sql                      pgTAP tests (328 assertions)
+    06_study.sql  07_wave3.sql        pgTAP tests (419 assertions)
     local_stubs/                      LOCAL VALIDATION ONLY (plain Postgres)
 ```
 
@@ -33,11 +34,12 @@ supabase db push            # applies supabase/migrations in order
 `migrations/20261002000000_init.sql`, then `migrations/20261002000100_storage.sql`,
 then `migrations/20261003000000_hardening.sql`, then
 `migrations/20261004000000_attachments.sql`, then
-`migrations/20261005000000_study.sql`, each as one script, in that
+`migrations/20261005000000_study.sql`, then
+`migrations/20261006000000_wave3.sql`, each as one script, in that
 order. A project that already ran some of them only needs the later ones
-(the hardening, attachments and study migrations are safe to run more than
-once; the study migration also works when the editor runs it as a single
-transaction, see *Study*).
+(the hardening, attachments, study and wave3 migrations are safe to run more
+than once; the study and wave3 migrations also work when the editor runs
+them as a single transaction, see *Study*).
 
 After applying, in the dashboard:
 - Authentication → Providers → Email: enabled (email/password).
@@ -108,6 +110,7 @@ delete them under Authentication -> Users.
 | `subjects`, `notes`, `quizzes`, `quiz_attempts` | Synced tables: client `id`/`created_at` accepted, `owner_id` defaults to `auth.uid()`, `updated_at` forced to server `now()`, soft delete via `deleted_at`. |
 | `decks` | Flashcard decks; synced, shared and copied exactly like `quizzes` (subject + optional note). See *Study*. |
 | `card_reviews`, `mistakes` | Private per-user study state (spaced repetition per card, wrong answers per question). Synced, never shared. See *Study*. |
+| `chats`, `chat_messages` | Private per-user AI chats about a subject / note / attachment (or general). Synced, never shared. See *Wave 3*. |
 | `shares` | `(resource_type, resource_id, recipient_id)` unique; `resource_type` is the enum `share_resource_type` (`subject`/`note`/`quiz`/`deck`, same JSON strings as a text column). FKs `shares_owner_id_fkey` / `shares_recipient_id_fkey` → `profiles`. |
 | `attachments` | Files attached to a subject ("Files" library). Synced table like `notes`; blob in bucket `attachments` at `storage_path`. See *Attachments*. |
 | `note_image_copies` | Per-user queue of Storage copies produced by `copy_*` (see below); `bucket` says which bucket (`note-images` default, or `attachments`). |
@@ -153,6 +156,8 @@ caller holds a share whose `owner_id` equals the row's owner and that targets:
 | decks | owner or `can_read_deck` (same rules as quizzes, share type `deck`) | owner only; subject/note must be owned by the same user |
 | card_reviews | owner only | owner only; INSERT also needs `can_read_deck(deck_id)` |
 | mistakes | owner only | owner only; INSERT also needs `can_read_quiz(quiz_id)` |
+| chats | owner only (recipients of a shared subject never see the owner's chats) | owner only; INSERT also needs the scope to be readable (`private.can_read_chat_scope`) |
+| chat_messages | owner only | owner only; the chat must exist (`23503`) and have the same owner (`42501`) |
 | note_image_copies | owner | INSERT (own folder only) / DELETE by owner |
 
 `anon` has no table or function privileges. Supabase's default grants
@@ -203,6 +208,10 @@ so the migration only enables it and emits a NOTICE.
 | `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; the note and its subject must not be deleted; target subject must be owned by the caller and not deleted. Also copies the note's non-deleted quizzes and decks. |
 | `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new quiz id) | Needs `can_read_quiz`; the quiz, its subject and (if any) its note must not be deleted; target subject owned; target note (optional) owned, not deleted and in the target subject. |
 | `copy_deck(p_deck_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new deck id) | Same rules as `copy_quiz`, with `can_read_deck`. Copies `title, description, source, cards` (card ids kept); review state is not copied. |
+
+Since Wave 3 every `copy_*` also copies `tags` of notes, quizzes and decks;
+`pinned` and `archived_at` are never copied (copies start unpinned and
+unarchived).
 
 All copies are atomic (one transaction), get fresh uuids, `owner_id =
 auth.uid()`, and server timestamps. The `copy_*` functions are
@@ -370,3 +379,59 @@ Dart side: `docs/CONTRACTS.md` → *Study (Wave 2)*.
   `resource_type::text = 'deck'` (and `is_resource_owner` switches on
   `p_resource_type::text`). Verified with `psql --single-transaction`, run
   twice.
+
+## Wave 3 (`20261006000000_wave3.sql`)
+
+AI chats and organization. Contract for the Dart side: `docs/CONTRACTS.md`
+→ *Wave 3 schema*. No enum change, so the file runs fine as one transaction
+(SQL editor); everything is `if not exists` / `create or replace` /
+`drop … if exists` (verified with `psql --single-transaction`, run twice).
+
+- **`public.chats`** `(id, owner_id, scope_type, scope_id, title, provider,
+  model, created_at, updated_at, deleted_at)`: `scope_type in
+  ('subject','note','attachment','general')` (default `general`);
+  `scope_id` is null exactly for `general` (CHECK `chats_scope_shape`);
+  `title` text not null default `''` (≤ 500), `provider` / `model` ≤ 255.
+  Same sync triggers as the other tables (server `updated_at`, immutable
+  `owner_id`); `scope_type` / `scope_id` are immutable (`42501`), since the
+  insert is where readability is checked. `scope_id` is polymorphic (no FK):
+  hard-deleting the scope leaves the chat in place.
+- **`public.chat_messages`** `(id, chat_id, owner_id, role, content,
+  citations, created_at, updated_at, deleted_at)`: `role in
+  ('user','assistant','system')`, `content` ≤ 200 000 chars, `citations`
+  jsonb default `[]` validated by `private.chat_citations_valid` (array of
+  objects with string `type` 1..64, string `id` 1..255, string `title`,
+  optional `snippet` string/null; extra keys allowed). Trigger
+  `tg_chat_messages_check_parent`: chat must exist (`23503`) and be owned by
+  the message owner (`42501`); `chat_id` immutable. Hard-deleting a chat
+  cascades to its messages; soft deletes do not cascade (client job).
+- **RLS (private, never shared)**: every operation on both tables is
+  `owner_id = auth.uid()`; there is no share resource type for chats, so a
+  recipient of a shared subject can read the subject but never the owner's
+  chats about it (and vice versa). `chats` INSERT additionally requires
+  `private.can_read_chat_scope(scope_type, scope_id)`: `general` → scope_id
+  null; `subject` → `can_read_subject`; `note` → `can_read_note`;
+  `attachment` → `can_read_attachment` (owner, or a live attachment whose
+  subject passes `can_read_subject`, i.e. subject shares only). Owners pass
+  for their own tombstoned scopes (offline-created chats still sync);
+  recipients only for live rows. Because RLS `WITH CHECK` runs before
+  CHECK constraints, malformed scopes (unknown type, general with an id,
+  scoped without one) reach API clients as `42501`, not `23514`.
+  Revocation/soft delete of the scope keeps existing chats (and new messages
+  in them) — private history, like `card_reviews`; only new chats on that
+  scope are refused.
+- **Organization columns** (additive, defaulted; old clients unaffected):
+  `notes`, `quizzes`, `decks` get `tags text[] not null default '{}'`
+  (CHECK `private.tags_valid`: ≤ 50 tags, none null/blank, each ≤ 64 chars;
+  `23514`) and `pinned boolean not null default false`, plus GIN indexes
+  `{notes,quizzes,decks}_tags_idx` for `@>` / `&&` filters. `subjects` get
+  `archived_at timestamptz null` and `pinned boolean not null default false`.
+  They are columns of the row, so they are the **owner's** values: owner-only
+  writes via the existing policies, recipients see them read-only (an update
+  by a recipient is a silent no-op). A personal per-user pin/archive for
+  shared items is out of scope (would need a per-user table). Archiving does
+  not affect sharing, reading or copying.
+- **Copies**: `private.copy_note_into`, `copy_subject`, `copy_quiz`,
+  `copy_deck` replaced (bodies otherwise identical to the study migration)
+  to copy `tags`; `pinned` / `archived_at` are not copied. `copy_note` is
+  unchanged (it calls `copy_note_into`).
