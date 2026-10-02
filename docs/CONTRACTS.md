@@ -98,6 +98,91 @@ properties required, nullables as `type: [x, 'null']`,
   `copy_note(p_note_id uuid, p_target_subject_id uuid) returns uuid`;
   `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null) returns uuid`.
 - Storage bucket `note-images`, object path `{owner_id}/{note_id}/{uuid}.{ext}`.
+- `attachments(...)` + Storage bucket `attachments`: see *Attachments* below.
+
+### Attachments (backend: `supabase/migrations/20261004000000_attachments.sql`)
+
+Files attached to a **subject** ("Files" library). Shared together with the
+subject (subject shares only — note/quiz shares never expose them), copied by
+`copy_subject` (not by `copy_note`/`copy_quiz`).
+
+**Table `public.attachments`** — synced table, same conventions as `notes`
+(client `id` uuid v4 + `created_at`; `owner_id` defaults to `auth.uid()` and
+is immutable; `updated_at` is server `now()` = sync cursor; soft delete via
+`deleted_at`; upsert with `onConflict: 'id'`).
+
+| Column | Type | Rules |
+|---|---|---|
+| `id` | uuid pk | client-generated |
+| `subject_id` | uuid not null → subjects (on delete cascade) | subject must exist (`23503`) and be owned by the same user (`42501`); **immutable** (`42501`) |
+| `owner_id` | uuid not null default `auth.uid()` | immutable |
+| `name` | text not null | display name (original file name), 1..512 chars |
+| `mime_type` | text null | ≤ 255 chars |
+| `size_bytes` | bigint not null default 0 | ≥ 0 |
+| `kind` | text not null default `'other'` | one of `pdf`, `image`, `text`, `docx`, `audio`, `video`, `other` (`23514`) |
+| `storage_path` | text not null unique | exactly `{owner_id}/{subject_id}/{id}/{file}` (`23514` otherwise); **immutable** (`42501`) |
+| `extracted_text` | text null | client-extracted text (txt/md/docx), ≤ 200 000 chars (`23514`); truncate before saving |
+| `created_at`, `updated_at`, `deleted_at` | timestamptz | as other synced tables |
+
+Suggested model: `Attachment : Syncable` with `id, subjectId, ownerId, name,
+mimeType?, sizeBytes, kind (AttachmentKind, JSON = name), storagePath,
+extractedText?, createdAt, updatedAt, deletedAt?`. Kind by extension:
+`pdf`→pdf; `png/jpg/jpeg/gif/webp/heic/bmp`→image; `txt/md`→text;
+`docx`→docx; `mp3/wav/m4a/aac/ogg/flac`→audio; `mp4/mov/webm/mkv/avi`→video;
+else other.
+
+**Storage**: private bucket `attachments` (50 MiB per file, any MIME type).
+Object path = the row's `storage_path`:
+`{owner_id}/{subject_id}/{attachment_id}/{file}`, uuids lowercase (as Dart's
+`uuid` package and Postgres print them). `{file}` is one path segment: use a
+sanitized file name (keep `[A-Za-z0-9._-]`, replace anything else with `_`,
+≤ 100 chars, keep the extension, fallback `file`); the original name goes in
+`name`. Writes only in your own folder; reads: own folder, or a live
+attachment row with exactly that `storage_path` whose subject you can read.
+Download with `storage.from('attachments').download(storagePath)` (or a
+signed URL); 403/404 = unavailable (revoked, deleted, or blob not uploaded
+yet / never copied).
+
+**Visibility for recipients**: an attachment is readable while the attachment
+and its subject are not soft-deleted and the caller has a share on that
+subject. Recipients never receive attachment tombstones; revocation and soft
+deletes make rows silently disappear (same as notes: reconcile ids of
+non-owned cached attachments, and purge their cached bytes).
+
+**Client protocol**
+1. *Sync*: add `attachments` to the pulled/pushed tables (keyset cursor like
+   the others). When a new **subject** share appears, also fetch
+   `attachments` by `subject_id` without the cursor. Note/quiz shares never
+   need it.
+2. *Upload* (owner of the subject only): generate `id`, build
+   `storage_path`, store bytes locally, queue the blob upload
+   (`storage.from('attachments').uploadBinary(storagePath, bytes,
+   fileOptions: FileOptions(contentType: mimeType, upsert: true))`) **before**
+   the row upsert in the FIFO outbox, so recipients rarely see a row whose
+   blob is not there yet (handle 404 anyway). Text/docx: extract text in-app,
+   truncate to 200 000 chars, set `extracted_text`.
+3. *Update*: only `name` (and `extracted_text`, `mime_type`, `kind`,
+   `size_bytes`) may change; never `subject_id`/`storage_path`. Moving to
+   another subject is not supported.
+4. *Delete*: soft delete the row (push the tombstone), then remove the blob
+   with `storage.from('attachments').remove([storagePath])`. Soft-deleting a
+   subject should cascade locally to its attachments (and their blobs).
+   Hard-deleting a subject on the server cascades the rows but never the
+   blobs.
+5. *Copy* (`copy_subject`): the RPC copies live attachment rows to the caller
+   (new ids, `storage_path = {me}/{new_subject}/{new_id}/{same file}`) and
+   queues one `note_image_copies` row per blob with **`bucket =
+   'attachments'`** (note images keep `bucket = 'note-images'`, the default).
+   The copy processor must select `id, bucket, from_path, to_path` and call
+   `storage.from(row.bucket).copy(fromPath, toPath)`, with the existing
+   rules (delete the row on success / 409 / permanent error; keep it on
+   network/transient errors). Copy any locally cached bytes for the source
+   path to the new path. Until processed the copied attachment's blob is
+   missing. (Older builds that ignore `bucket` try `note-images`, fail and
+   drop such rows; the copied attachment then has no blob.)
+6. *Errors*: `42501` (not owner, subject not owned, immutable column),
+   `23514` (bad `kind`, path shape, text too long), `23503` (subject not
+   synced yet: defer like notes).
 
 ## Local storage (`lib/data/local/hive_boxes.dart`)
 
