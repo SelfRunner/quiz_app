@@ -57,3 +57,6 @@ env.*.json
 # Supabase CLI local state
 supabase/.branches/
 supabase/.temp/
+
+# Claude Code agent worktrees
+.claude/worktrees/
