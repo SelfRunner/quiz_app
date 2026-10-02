@@ -15,7 +15,9 @@ class AnswerReviewCard extends StatelessWidget {
     required this.grade,
     this.answered = true,
     this.flagged = false,
+    this.partial = false,
     this.footer,
+    this.explain,
   });
 
   /// Zero-based position (shown as `index + 1`).
@@ -33,8 +35,14 @@ class AnswerReviewCard extends StatelessWidget {
   final bool answered;
   final bool flagged;
 
+  /// Graded partly correct by AI (half a point; [grade] is false).
+  final bool partial;
+
   /// Extra content (e.g. self-grade buttons).
   final Widget? footer;
+
+  /// "Explain" action, shown at the bottom.
+  final Widget? explain;
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +74,7 @@ class AnswerReviewCard extends StatelessWidget {
 
     final (IconData icon, Color iconColor, String status) = switch (grade) {
       true => (Icons.check_circle_outline, colors.success, 'Correct'),
+      false when partial => (Icons.adjust, colors.warning, 'Partly correct'),
       false => (Icons.highlight_off, colors.danger, 'Incorrect'),
       null when !answered => (
         Icons.remove_circle_outline,
@@ -167,6 +176,13 @@ class AnswerReviewCard extends StatelessWidget {
                   ),
                 ],
                 if (footer != null) ...[Gaps.h12, footer!],
+                if (explain != null) ...[
+                  Gaps.h4,
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: explain,
+                  ),
+                ],
               ],
             ),
           ),

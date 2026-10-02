@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../ai/ai_providers.dart';
+import '../../../ai/ai_tools_service.dart';
 import '../../../core/providers.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/data_providers.dart';
@@ -12,6 +14,7 @@ import '../../../data/models/question.dart';
 import '../../../data/models/quiz.dart';
 import '../../../data/models/quiz_attempt.dart';
 import '../../../study/exam.dart';
+import '../application/ai_grading.dart';
 import '../application/attempt_recording.dart';
 import '../domain/exam_session.dart';
 import 'exam_results_view.dart';
@@ -63,6 +66,15 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
   bool _mistakesRecorded = false;
   SaveStatus _saveStatus = SaveStatus.idle;
   String? _saveError;
+
+  /// AI grades of written answers (batch after submitting), by question id.
+  final Map<String, AiGradeState> _aiGrades = {};
+
+  /// Questions graded partly correct (half a point).
+  final Set<String> _partial = {};
+
+  /// Batch AI grading progress; null when not grading.
+  ({int done, int total})? _gradingProgress;
 
   final _answer = TextEditingController();
   final _focus = FocusNode(debugLabel: 'exam');
@@ -129,6 +141,9 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
         _mistakesRecorded = false;
         _saveStatus = SaveStatus.idle;
         _saveError = null;
+        _aiGrades.clear();
+        _partial.clear();
+        _gradingProgress = null;
         _phase = _Phase.playing;
       });
       _answer.clear();
@@ -231,6 +246,94 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
       _phase = _Phase.results;
     });
     await _saveResult();
+    if (mounted && ref.read(aiGradingActiveProvider)) await _gradeWithAi(s);
+  }
+
+  /// Score with partial credit: correct answers + half a point for each
+  /// partly correct one.
+  double _creditOf(List<Question> questions, List<QuestionAnswer> answers) {
+    final scored = scoreExam(questions, answers);
+    final partial = scored.answers
+        .where((a) => a.isCorrect == false && _partial.contains(a.questionId))
+        .length;
+    return scored.score.correct + partial * 0.5;
+  }
+
+  /// Sets the grade of a written answer in the result (score updated).
+  void _applyGrade(String questionId, bool correct, {bool partial = false}) {
+    final r = _result;
+    final s = _session;
+    if (r == null || s == null) return;
+    if (partial && !correct) {
+      _partial.add(questionId);
+    } else {
+      _partial.remove(questionId);
+    }
+    final answers = [
+      for (final a in r.answers)
+        a.questionId == questionId ? a.copyWith(isCorrect: correct) : a,
+    ];
+    final scored = scoreExam(s.questions, answers);
+    _result = r.copyWith(
+      answers: scored.answers,
+      score: _creditOf(s.questions, scored.answers),
+    );
+  }
+
+  /// Grades every written answer with AI (a few requests at a time), shows
+  /// progress, then saves once. Failed ones stay for self-grading.
+  Future<void> _gradeWithAi(ExamSession session) async {
+    final r = _result;
+    if (r == null) return;
+    final byId = {for (final a in r.answers) a.questionId: a};
+    final items = <({Question question, String answer})>[
+      for (final q in session.questions)
+        if (byId[q.id] case final a?
+            when a.isCorrect == null && canAiGrade(q, a.textAnswer ?? ''))
+          (question: q, answer: a.textAnswer!),
+    ];
+    if (items.isEmpty) return;
+    setState(() {
+      for (final i in items) {
+        _aiGrades[i.question.id] = const AiGradeState.loading();
+      }
+      _gradingProgress = (done: 0, total: items.length);
+    });
+    final applied = <QuestionAnswer>[];
+    bool cancelled() => !mounted || !identical(_session, session);
+    await gradeShortAnswersBatch(
+      ref.read(aiToolsServiceProvider),
+      items,
+      isCancelled: cancelled,
+      onResult: (id, state) => setState(() {
+        final p = _gradingProgress;
+        if (p != null) _gradingProgress = (done: p.done + 1, total: p.total);
+        final previous = _aiGrades[id];
+        if (previous == null || !previous.loading) return; // self-graded
+        _aiGrades[id] = state;
+        final grade = state.grade;
+        if (grade == null) return;
+        final correct = grade.verdict == GradeVerdict.correct;
+        _applyGrade(
+          id,
+          correct,
+          partial: grade.verdict == GradeVerdict.partial,
+        );
+        applied.add(QuestionAnswer(questionId: id, isCorrect: correct));
+      }),
+    );
+    if (cancelled()) return;
+    setState(() => _gradingProgress = null);
+    if (applied.isEmpty) return;
+    final alreadyRecorded = _mistakesRecorded;
+    await _saveResult();
+    if (alreadyRecorded) {
+      await recordAnswers(
+        ref.read(mistakeRepositoryProvider),
+        session.attempt.quizId,
+        applied,
+      );
+    }
   }
 
   Future<void> _saveResult() async {
@@ -257,21 +360,24 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
     }
   }
 
+  /// Self-grade, or an override of the AI grade.
   Future<void> _selfGrade(String questionId, bool correct) async {
     final r = _result;
     final s = _session;
     if (r == null || s == null) return;
-    final answers = [
-      for (final a in r.answers)
-        a.questionId == questionId ? a.copyWith(isCorrect: correct) : a,
-    ];
-    final scored = scoreExam(s.questions, answers);
     final alreadyRecorded = _mistakesRecorded;
     setState(() {
-      _result = r.copyWith(
-        answers: scored.answers,
-        score: scored.score.correct.toDouble(),
-      );
+      final ai = _aiGrades[questionId];
+      if (ai != null) {
+        _aiGrades[questionId] = ai.loading
+            ? const AiGradeState.skipped()
+            : ai.decide(
+                correct
+                    ? AiGradeDecision.markedRight
+                    : AiGradeDecision.markedWrong,
+              );
+      }
+      _applyGrade(questionId, correct);
     });
     await _saveResult();
     if (alreadyRecorded) {
@@ -450,6 +556,10 @@ class _ExamPlayerState extends ConsumerState<ExamPlayer> {
         saveError: _saveError,
         onRetrySave: _saveResult,
         onSelfGrade: _selfGrade,
+        quiz: widget.quiz,
+        aiGrades: _aiGrades,
+        partialIds: _partial,
+        gradingProgress: _gradingProgress,
         onNewExam: () => setState(() {
           _config = _lastConfig;
           _phase = _Phase.setup;

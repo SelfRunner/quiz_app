@@ -8,6 +8,7 @@ import 'package:quiz_app/ai/ai_capabilities.dart';
 import 'package:quiz_app/ai/ai_providers.dart';
 import 'package:quiz_app/ai/ai_readiness.dart';
 import 'package:quiz_app/ai/ai_service.dart';
+import 'package:quiz_app/ai/ai_tools_service.dart';
 import 'package:quiz_app/ai/llm_provider.dart';
 import 'package:quiz_app/core/errors/app_exception.dart';
 import 'package:quiz_app/core/providers.dart';
@@ -20,6 +21,7 @@ import 'package:quiz_app/data/repositories/quiz_repository.dart';
 import 'package:quiz_app/data/repositories/study_activity_repository.dart';
 import 'package:quiz_app/data/repositories/subject_repository.dart';
 import 'package:quiz_app/features/ai_generate/presentation/ai_generate_screen.dart';
+import 'package:quiz_app/features/quizzes/application/ai_grading.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_detail_screen.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_edit_screen.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_play_screen.dart';
@@ -482,6 +484,113 @@ class FakeAiService implements AiService {
   }) async {}
 }
 
+const testSelection = AiSelection(
+  providerId: LlmProviderId.openai,
+  model: 'gpt-test',
+);
+
+/// Fake [AiToolsService] for "Explain this" and AI grading. Defaults: an
+/// explanation citing the first source, and a "correct" grade.
+class FakeAiToolsService implements AiToolsService {
+  final List<
+    ({Question question, QuestionAnswer? answer, List<AiSource> sources})
+  >
+  explainCalls = [];
+  final List<({String question, String modelAnswer, String answer})>
+  gradeCalls = [];
+
+  Future<AiExplanation> Function(
+    Question question,
+    QuestionAnswer? answer,
+    List<AiSource> sources,
+  )?
+  onExplain;
+  Future<ShortAnswerGrade> Function(String question, String answer)? onGrade;
+
+  static AiExplanation defaultExplanation(List<AiSource> sources) {
+    final first = sources.whereType<NoteSource>().firstOrNull;
+    return AiExplanation(
+      markdown: first == null
+          ? 'The answer is **right** because of the facts.'
+          : 'The answer is **right** because of the notes [S1].',
+      selection: testSelection,
+      citations: [
+        if (first != null)
+          ChatCitation(
+            number: 1,
+            type: AiSourceType.note,
+            id: first.id,
+            title: first.title,
+          ),
+      ],
+    );
+  }
+
+  @override
+  Future<AiExplanation> explainAnswer(
+    Question question,
+    QuestionAnswer? userAnswer, {
+    List<AiSource> sources = const [],
+    String? language,
+    LlmProviderId? providerId,
+    String? model,
+  }) {
+    explainCalls.add((
+      question: question,
+      answer: userAnswer,
+      sources: sources,
+    ));
+    return onExplain?.call(question, userAnswer, sources) ??
+        Future.value(defaultExplanation(sources));
+  }
+
+  @override
+  Future<ShortAnswerGrade> gradeShortAnswer(
+    String question,
+    String modelAnswer,
+    String userAnswer, {
+    String? language,
+    LlmProviderId? providerId,
+    String? model,
+  }) {
+    gradeCalls.add((
+      question: question,
+      modelAnswer: modelAnswer,
+      answer: userAnswer,
+    ));
+    return onGrade?.call(question, userAnswer) ??
+        Future.value(
+          const ShortAnswerGrade(
+            verdict: GradeVerdict.correct,
+            score: 1,
+            feedback: 'Well done.',
+            selection: testSelection,
+          ),
+        );
+  }
+
+  @override
+  Future<NoteToolResult> transformNote(
+    String markdown,
+    NoteTool tool, {
+    String? title,
+    String? language,
+    String? extraInstructions,
+    LlmProviderId? providerId,
+    String? model,
+  }) => throw UnimplementedError();
+}
+
+/// [AiGradeShortAnswersSetting] starting at a fixed value (no Hive).
+class PresetAiGradeSetting extends AiGradeShortAnswersSetting {
+  PresetAiGradeSetting(this.initial);
+
+  final bool initial;
+
+  @override
+  bool build() => initial;
+}
+
 const sampleDraft = QuizDraft(
   title: 'Planets',
   description: 'Solar system basics',
@@ -560,6 +669,12 @@ class TestEnv {
   /// Set false to lock AI entry points regardless of [ai.selection].
   bool aiReady = true;
 
+  /// "Explain this" / AI grading service.
+  final tools = FakeAiToolsService();
+
+  /// Initial "Grade short answers with AI" setting.
+  bool aiGrading = false;
+
   AiReadiness _readiness() {
     if (!aiReady) {
       return const AiReadiness.notReady(
@@ -593,6 +708,10 @@ class TestEnv {
     mistakeRepositoryProvider.overrideWithValue(mistakes),
     studyActivityRepositoryProvider.overrideWithValue(activity),
     aiServiceProvider.overrideWithValue(ai),
+    aiToolsServiceProvider.overrideWithValue(tools),
+    aiGradeShortAnswersProvider.overrideWith(
+      () => PresetAiGradeSetting(aiGrading),
+    ),
     clockProvider.overrideWithValue(() => now),
     idGeneratorProvider.overrideWithValue(nextId),
   ];

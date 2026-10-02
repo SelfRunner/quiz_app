@@ -236,6 +236,63 @@ void main() {
     expect(find.text('4 open mistakes in 3 quizzes'), findsOneWidget);
   });
 
+  testWidgets('Explain on a mistake row explains the correct answer', (
+    tester,
+  ) async {
+    _size(tester);
+    final env = await _seed();
+    await tester.pumpWidget(env.app('/mistakes'));
+    await tester.pumpAndSettle();
+    await _tapKey(tester, 'explain-b1');
+    expect(find.text('Explanation'), findsOneWidget);
+    expect(
+      find.textContaining('because of the facts', findRichText: true),
+      findsOneWidget,
+    );
+    final call = env.tools.explainCalls.single;
+    expect(call.question.prompt, 'Speed of light?');
+    expect(call.answer, isNull);
+  });
+
+  testWidgets('Practice all: Explain after checking uses the question\'s '
+      'quiz notes', (tester) async {
+    _size(tester);
+    final env = await _seed();
+    env.notes.add(
+      Note(
+        id: 'n-optics',
+        subjectId: 's1',
+        ownerId: userId,
+        title: 'Optics notes',
+        contentMd: 'Light is fast.',
+        createdAt: fixedNow,
+        updatedAt: fixedNow,
+      ),
+    );
+    env.quizzes.add(
+      env.quizzes.all
+          .firstWhere((q) => q.id == 'qb')
+          .copyWith(noteId: 'n-optics'),
+    );
+    await tester.pumpWidget(env.app('/mistakes'));
+    await tester.pumpAndSettle();
+    await _tapKey(tester, 'practice-all-mistakes');
+    await _tapKey(tester, 'start-quiz');
+    while (find.text('Speed of light?').evaluate().isEmpty) {
+      await _tapKey(tester, 'option-0');
+      await _tapKey(tester, 'primary-action');
+      await _tapKey(tester, 'primary-action');
+    }
+    await _tapKey(tester, 'option-1');
+    await _tapKey(tester, 'primary-action');
+    await tester.tap(find.text('Explain'));
+    await tester.pumpAndSettle();
+    final call = env.tools.explainCalls.single;
+    expect(call.question.prompt, 'Speed of light?');
+    expect(call.answer!.selectedIndices, [1]);
+    expect([for (final s in call.sources) s.id], ['n-optics']);
+  });
+
   testWidgets('empty state', (tester) async {
     _size(tester);
     final env = TestEnv();

@@ -74,6 +74,7 @@ class QuizSession {
   final Map<String, String> _texts = {};
   final Map<String, bool> _grades = {};
   final Set<String> _revealed = {};
+  final Set<String> _partial = {};
 
   int get length => items.length;
   PlayItem get current => items[index];
@@ -87,9 +88,20 @@ class QuizSession {
   bool isChecked(String id) => _grades.containsKey(id);
   bool isRevealed(String id) => _revealed.contains(id);
 
+  /// Graded "partly correct" (AI grading): counts as wrong for mistakes and
+  /// "retry missed", and as half a point in [credit].
+  bool isPartial(String id) => _partial.contains(id) && _grades[id] == false;
+
   /// Number of graded questions so far.
   int get answeredCount => _grades.length;
   int get correctCount => _grades.values.where((g) => g).length;
+
+  /// Questions graded partly correct.
+  int get partialCount => items.where((i) => isPartial(i.id)).length;
+
+  /// Score in points: correct answers plus half a point per partly correct
+  /// answer (stored as `QuizAttempt.score`).
+  double get credit => correctCount + partialCount * 0.5;
   bool get isComplete => items.every((i) => _grades.containsKey(i.id));
 
   /// Toggles/sets the option shown at [displayIndex] of the current question.
@@ -130,10 +142,18 @@ class QuizSession {
   /// Shows the model answer of the current short-answer question.
   void reveal() => _revealed.add(current.id);
 
-  /// Records the self-grade of the current short-answer question.
-  void selfGrade({required bool correct}) {
-    _revealed.add(current.id);
-    _grades[current.id] = correct;
+  /// Records the grade of the current short-answer question (self-grade or
+  /// AI verdict). [partial] (only with `correct: false`) marks it partly
+  /// correct.
+  void selfGrade({required bool correct, bool partial = false}) {
+    final id = current.id;
+    _revealed.add(id);
+    _grades[id] = correct;
+    if (partial && !correct) {
+      _partial.add(id);
+    } else {
+      _partial.remove(id);
+    }
   }
 
   void next() {
@@ -146,16 +166,16 @@ class QuizSession {
 
   /// Answers in play order (ungraded questions get `isCorrect: null`).
   List<QuestionAnswer> answers() => [
-    for (final item in items)
-      QuestionAnswer(
-        questionId: item.id,
-        selectedIndices: (selectedFor(item.id).toList()..sort()),
-        textAnswer: _texts[item.id]?.trim().isEmpty ?? true
-            ? null
-            : _texts[item.id]!.trim(),
-        isCorrect: _grades[item.id],
-      ),
+    for (final item in items) answerFor(item.id),
   ];
+
+  /// The answer to question [id] so far.
+  QuestionAnswer answerFor(String id) => QuestionAnswer(
+    questionId: id,
+    selectedIndices: (selectedFor(id).toList()..sort()),
+    textAnswer: _texts[id]?.trim().isEmpty ?? true ? null : _texts[id]!.trim(),
+    isCorrect: _grades[id],
+  );
 
   /// Questions answered wrong or not at all, in play order.
   List<Question> get missedQuestions => [
@@ -164,7 +184,7 @@ class QuizSession {
   ];
 
   /// Score as a fraction 0..1.
-  double get fraction => items.isEmpty ? 0 : correctCount / items.length;
+  double get fraction => items.isEmpty ? 0 : credit / items.length;
 
   /// Graded answers only (`isCorrect != null`), e.g. for mistake tracking.
   List<QuestionAnswer> gradedAnswers() => [
@@ -181,7 +201,7 @@ class QuizSession {
   QuizAttempt toAttempt(QuizAttempt started, {required DateTime completedAt}) =>
       started.copyWith(
         answers: answers(),
-        score: correctCount.toDouble(),
+        score: credit,
         total: items.length,
         startedAt: startedAt,
         completedAt: completedAt,

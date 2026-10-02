@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../ai/ai_providers.dart';
+import '../../../ai/ai_tools_service.dart';
 import '../../../core/providers.dart';
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/models/question.dart';
+import '../../../data/models/quiz.dart';
+import '../application/ai_grading.dart';
 import '../domain/quiz_session.dart';
+import 'ai_grading_widgets.dart';
 import 'practice_question_view.dart';
 import 'quiz_format.dart';
 import 'quiz_results_view.dart';
@@ -34,6 +39,7 @@ class PracticePlayer extends ConsumerStatefulWidget {
     this.subheading,
     this.icon = Icons.quiz_outlined,
     this.emptyMessage = 'This quiz has no questions yet.',
+    this.quizFor,
   });
 
   /// App bar title.
@@ -55,6 +61,9 @@ class PracticePlayer extends ConsumerStatefulWidget {
   final VoidCallback onClose;
   final String emptyMessage;
 
+  /// The quiz a question belongs to ("Explain" uses its notes as context).
+  final Quiz? Function(Question question)? quizFor;
+
   @override
   ConsumerState<PracticePlayer> createState() => _PracticePlayerState();
 }
@@ -70,6 +79,9 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
   String? _saveError;
   final _answer = TextEditingController();
   final _focus = FocusNode(debugLabel: 'quiz-play');
+
+  /// AI grades of short answers in the current run, by question id.
+  final Map<String, AiGradeState> _aiGrades = {};
 
   @override
   void dispose() {
@@ -92,6 +104,7 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
         isPractice: practice,
       );
       _answer.clear();
+      _aiGrades.clear();
       _completedAt = null;
       _saveStatus = SaveStatus.idle;
       _saveError = null;
@@ -114,7 +127,14 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
       if (item.question.type.hasOptions) {
         if (s.canCheck) _update((s) => s.check());
       } else if (!s.isRevealed(item.id)) {
+        final text = s.textFor(item.id);
+        final useAi =
+            ref.read(aiGradingActiveProvider) &&
+            canAiGrade(item.question, text);
         _update((s) => s.reveal());
+        if (useAi) _gradeWithAi(s, item.question, text);
+      } else if (_aiGrades[item.id]?.hasVerdict ?? false) {
+        _acceptAiGrade();
       }
       return;
     }
@@ -128,7 +148,56 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
   }
 
   void _selfGrade(bool correct) {
+    final s = _session;
+    if (s == null) return;
+    final id = s.current.id;
+    final ai = _aiGrades[id];
+    if (ai != null && ai.hasVerdict) {
+      _aiGrades[id] = ai.decide(
+        correct ? AiGradeDecision.markedRight : AiGradeDecision.markedWrong,
+      );
+    }
     _update((s) => s.selfGrade(correct: correct));
+    _focus.requestFocus();
+  }
+
+  Future<void> _gradeWithAi(
+    QuizSession session,
+    Question question,
+    String text,
+  ) async {
+    setState(() => _aiGrades[question.id] = const AiGradeState.loading());
+    final result = await gradeShortAnswerSafely(
+      ref.read(aiToolsServiceProvider),
+      question,
+      text,
+    );
+    if (!mounted || !identical(_session, session)) return;
+    final current = _aiGrades[question.id];
+    if (current == null || !current.loading) return; // skipped meanwhile
+    setState(() => _aiGrades[question.id] = result);
+  }
+
+  void _acceptAiGrade() {
+    final s = _session;
+    if (s == null) return;
+    final id = s.current.id;
+    final grade = _aiGrades[id]?.grade;
+    if (grade == null || s.isChecked(id)) return;
+    _aiGrades[id] = _aiGrades[id]!.decide(AiGradeDecision.accepted);
+    _update(
+      (s) => s.selfGrade(
+        correct: grade.verdict == GradeVerdict.correct,
+        partial: grade.verdict == GradeVerdict.partial,
+      ),
+    );
+    _focus.requestFocus();
+  }
+
+  void _skipAiGrade() {
+    final s = _session;
+    if (s == null) return;
+    setState(() => _aiGrades[s.current.id] = const AiGradeState.skipped());
     _focus.requestFocus();
   }
 
@@ -214,7 +283,9 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
         _update((s) => s.toggleOption(digit - 1));
         return KeyEventResult.handled;
       }
-    } else if (s.isRevealed(item.id) && !s.isChecked(item.id)) {
+    } else if (s.isRevealed(item.id) &&
+        !s.isChecked(item.id) &&
+        !(_aiGrades[item.id]?.loading ?? false)) {
       if (key == LogicalKeyboardKey.keyY) {
         _selfGrade(true);
         return KeyEventResult.handled;
@@ -256,6 +327,10 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
           onTextChanged: session.setText,
           onPrimary: _primaryAction,
           onSelfGrade: _selfGrade,
+          aiGrade: _aiGrades[session.current.id],
+          onAcceptAiGrade: _acceptAiGrade,
+          onSkipAiGrade: _skipAiGrade,
+          quiz: widget.quizFor?.call(session.current.question),
         ),
       ),
       _Phase.results => QuizResultsView(
@@ -271,6 +346,7 @@ class _PracticePlayerState extends ConsumerState<PracticePlayer> {
             ? null
             : () => _start(session.missedQuestions, practice: true),
         onDone: widget.onClose,
+        quizFor: widget.quizFor,
       ),
     };
 
@@ -441,6 +517,8 @@ class _SetupView extends StatelessWidget {
                     value: shuffleOptions,
                     onChanged: onShuffleOptions,
                   ),
+                  Divider(height: 1, color: colors.hairline),
+                  const AiGradingSwitch(),
                 ],
               ),
             ),

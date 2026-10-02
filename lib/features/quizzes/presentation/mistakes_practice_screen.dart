@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/data_providers.dart';
 import '../../../data/models/question.dart';
+import '../../../data/models/quiz.dart';
 import '../../../data/models/quiz_attempt.dart';
 import '../../../data/repositories/mistake_repository.dart';
 import '../application/attempt_recording.dart';
@@ -36,6 +37,9 @@ class _MistakesPracticeScreenState
     extends ConsumerState<MistakesPracticeScreen> {
   late final Map<String, MistakeOrigin> _origins;
   late final List<Question> _questions;
+  late final Map<String, Quiz> _quizzes = {
+    for (final g in widget.groups) g.quiz.id: g.quiz,
+  };
 
   @override
   void initState() {
@@ -49,6 +53,14 @@ class _MistakesPracticeScreenState
     final attempts = ref.read(attemptRepositoryProvider);
     final mistakes = ref.read(mistakeRepositoryProvider);
     final byQuiz = splitAnswersByQuiz(session.answers(), _origins);
+    // Partly correct answers (AI grading) count half a point.
+    final partialByQuiz = <String, int>{};
+    for (final item in session.items) {
+      final origin = _origins[item.id];
+      if (origin != null && session.isPartial(item.id)) {
+        partialByQuiz[origin.quizId] = (partialByQuiz[origin.quizId] ?? 0) + 1;
+      }
+    }
     final total = session.length;
     final duration = session.durationSecondsAt(completedAt);
     for (final MapEntry(key: quizId, value: answers) in byQuiz.entries) {
@@ -61,7 +73,9 @@ class _MistakesPracticeScreenState
       final saved = await attempts.save(
         started.copyWith(
           answers: answers,
-          score: answers.where((a) => a.isCorrect == true).length.toDouble(),
+          score:
+              answers.where((a) => a.isCorrect == true).length +
+              (partialByQuiz[quizId] ?? 0) * 0.5,
           total: answers.length,
           startedAt: session.startedAt,
           completedAt: completedAt,
@@ -98,6 +112,7 @@ class _MistakesPracticeScreenState
       onSave: _save,
       onPracticeRound: _practiceRound,
       onClose: () => Navigator.of(context).maybePop(),
+      quizFor: (q) => _quizzes[_origins[q.id]?.quizId],
     );
   }
 }

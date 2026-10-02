@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
+import '../../../data/models/question.dart';
+import '../../../data/models/quiz.dart';
 import '../domain/quiz_session.dart';
 import 'answer_review_card.dart';
+import 'explain_answer.dart';
 import 'quiz_format.dart';
 
 enum SaveStatus { idle, saving, saved, failed, practice }
@@ -19,6 +22,7 @@ class QuizResultsView extends StatelessWidget {
     required this.onRetrySave,
     this.onRetryMissed,
     this.saveError,
+    this.quizFor,
   });
 
   final QuizSession session;
@@ -29,6 +33,9 @@ class QuizResultsView extends StatelessWidget {
   final VoidCallback? onRetryMissed;
   final VoidCallback onDone;
   final VoidCallback onRetrySave;
+
+  /// The quiz a question belongs to (context for "Explain").
+  final Quiz? Function(Question question)? quizFor;
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +87,7 @@ class QuizResultsView extends StatelessWidget {
           ),
           Gaps.h12,
           Text(
-            '${s.correctCount} of ${s.length} correct · '
+            '${formatPoints(s.credit)} of ${s.length} correct · '
             '${formatDuration(duration)}',
             key: const Key('result-summary'),
             style: theme.textTheme.bodyMedium?.copyWith(
@@ -139,6 +146,12 @@ class QuizResultsView extends StatelessWidget {
                 selected: s.selectedFor(s.items[i].id).toList(),
                 text: s.textFor(s.items[i].id),
                 grade: s.gradeFor(s.items[i].id),
+                partial: s.isPartial(s.items[i].id),
+                explain: ExplainButton(
+                  question: s.items[i].question,
+                  answer: s.answerFor(s.items[i].id),
+                  quiz: quizFor?.call(s.items[i].question),
+                ),
               ),
             ),
           ),

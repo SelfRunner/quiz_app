@@ -34,6 +34,14 @@ String plural(int n, String one, [String? many]) =>
 int? attemptPercent(QuizAttempt a) =>
     a.total <= 0 ? null : (a.score / a.total * 100).round();
 
+/// Points with partial credit: `3`, `2.5`.
+String formatPoints(double points) {
+  final rounded = (points * 10).round() / 10;
+  return rounded == rounded.roundToDouble()
+      ? rounded.toInt().toString()
+      : rounded.toStringAsFixed(1);
+}
+
 String formatPercent(int? p) => p == null ? '–' : '$p%';
 
 String formatDuration(Duration d) {

@@ -103,6 +103,7 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
             s.gradedAnswers(),
           ),
           onClose: _close,
+          quizFor: (_) => quiz,
         );
       case AttemptMode.mistakes:
         final groupsAsync = ref.watch(openMistakesProvider);
@@ -148,6 +149,7 @@ class _QuizPlayScreenState extends ConsumerState<QuizPlayScreen> {
             s.gradedAnswers(),
           ),
           onClose: _close,
+          quizFor: (_) => quiz,
         );
     }
   }

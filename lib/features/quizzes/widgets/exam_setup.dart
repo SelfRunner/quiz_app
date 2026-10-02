@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../domain/exam_session.dart';
+import 'ai_grading_widgets.dart';
 
 /// Preset time limits in minutes (null = off).
 const List<int?> examTimePresets = [null, 5, 10, 15, 30];
@@ -204,6 +205,7 @@ class _ExamSetupFormState extends State<ExamSetupForm> {
             _emit();
           }),
         ),
+        const AiGradingSwitch(contentPadding: EdgeInsets.zero),
         Text(
           'No feedback until you submit. You can move between questions and '
           'flag them for review.',

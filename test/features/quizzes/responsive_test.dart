@@ -113,6 +113,8 @@ void main() {
       // Play through the question pages too.
       await tester.pumpWidget(env.app('/quizzes/q1/play'));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('start-quiz')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('start-quiz')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('option-0')));
