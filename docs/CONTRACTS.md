@@ -648,3 +648,106 @@ each other's folders. Owners replace the bodies, keeping signatures.
 AI note generation result is saved by the ai_generate feature (creates the note
 via `NoteRepository`, then navigates to `AppRoutes.noteEdit`). Subjects/notes
 screens only link to `AppRoutes.generate(...)`.
+
+## Design system (Wave 1)
+
+Look: minimal & clean (Notion/Obsidian-like). Neutral warm-gray surfaces
+(off-white `#FBFBFA` light, true dark gray `#191919` dark), near-black text,
+one restrained accent (indigo `AppPalette.accent`), hairline borders instead of
+shadows, flat app bars. Subject colors are **only** small accents: a
+`SubjectColorDot`, an `AppCard(accentColor:)` left border, or an icon tint -
+never large fills. Platform default font (works offline everywhere) with a
+tuned `AppTypography` text theme: semibold headings with slight negative
+tracking, body 16/14 with 1.6/1.55 line height.
+
+Import everything from one barrel:
+
+```dart
+import '../../../core/widgets/design_system.dart';
+```
+
+(`lib/core/theme/app_theme.dart` also re-exports the tokens and `AppColors`.)
+Note: `lib/features/quizzes/widgets/quiz_format.dart` has its own `MaxWidth`;
+a file importing both needs `hide MaxWidth` (prefer `ContentContainer`).
+
+**Tokens** (`lib/core/theme/tokens.dart`)
+- `Insets`: `xxs 2, xs 4, sm 8, md 12, lg 16, xl 24, xxl 32, xxxl 48`;
+  `gutter`/`gutterWide`, `card`, `row`, `page`, `pageWide` (EdgeInsets).
+- `Gaps`: `Gaps.h8`, `Gaps.w12`, ... (const `SizedBox`es).
+- `Radii`: `xs 4, sm 6, md 8 (default: inputs/buttons/rows), lg 10 (cards),
+  xl 14 (dialogs/sheets)`, plus `Radii.mdAll` etc.
+- `ContentWidth`: `form 640`, `readable 880` (notes, quiz play), `wide 1200`
+  (grids/lists). `Motion.fast/medium/slow`.
+- `AppColors.of(context)`: `sidebar, card, hairline, border, hover, pressed,
+  focusRing, mutedText, faintText, skeleton` and `info/success/warning/danger`
+  (+ `...Container`, `on...Container`). Use these rather than raw colors.
+
+**Component defaults from the theme**: outlined thin inputs (not filled);
+`FilledButton` for the one primary action per view, otherwise
+`FilledButton.tonal` (neutral gray), `OutlinedButton`, `TextButton`; all
+buttons radius 8, 40px min height, 2px focus ring on keyboard focus; flat
+outlined cards (`Card` has no shadow even with `elevation:`); neutral chips;
+dialogs/sheets/menus on `AppColors.card` with a hairline; floating inverse
+snackbars; desktop scrollbars thin and quiet; rail/bottom bar on
+`AppColors.sidebar` with a neutral indicator.
+
+**Widgets** (`lib/core/widgets/`)
+
+| Widget | Use |
+|---|---|
+| `SectionHeader(title:, count?, subtitle?, trailing?)` | Quiet heading above a group; `trailing` is usually a `TextButton`/`IconButton` |
+| `EmptyState(icon:, title:, message?, action?, compact = false)` | Line icon + text; `compact` for inline use inside sections |
+| `ErrorView`, `NotFoundView`, `AsyncValueView(value:, data:, onRetry?, loading?)` | As before; `loading:` e.g. `const LoadingSkeleton()` |
+| `AppCard(child:, onTap?, onLongPress?, accentColor?, selected, padding = Insets.card, margin)` | Flat outlined card; hover darkens border, focus ring |
+| `ListRowTile(title:, leading?, subtitle?, trailing?, actions = [], onTap?, selected, dense)` | Compact row; `actions` appear on hover/focus on desktop/web, always on touch |
+| `SubjectColorDot(color: subject.color, fallback?, size = 10, semanticLabel?)` | Subject accent (null color = hollow ring) |
+| `InfoBanner(message:, title?, kind: InfoBannerKind.info/success/warning/error, action?, onDismiss?)` | Inline callout |
+| `LockedFeature(child:, locked = true, onTap?, tooltip?)` | Wrap AI entry points: dims + disables child, lock badge (`LockedFeature.badgeKey`), whole area taps `onTap` (e.g. open the "Set up AI" sheet). `locked: false` returns `child` untouched |
+| `ContentContainer(child:, maxWidth = ContentWidth.readable, padding?)` | Top-centered capped column with responsive gutter (16 / 24) |
+| `ResponsiveScaffold(body:, appBar?, maxWidth, scrollable = false, padding?, floatingActionButton?)` | Scaffold + ContentContainer; `scrollable` scrolls full-width with page padding |
+| `KeyboardShortcutHint(keys: ['Ctrl','K'], label?)` / `.activator(SingleActivator(...))` | Keycaps; `.activator` shows `⌘ ⇧` on Apple, `Ctrl Shift` elsewhere |
+| `LoadingSkeleton(rows = 3, leading, subtitle, animate = true)`, `SkeletonBox` | Pulsing placeholder rows. Tests: use `pump()` or `animate: false` (pulse never settles) |
+| `Breakpoints.medium 720 / expanded 1000`, `Breakpoints.gutter(context)`, `MaxWidth` | As before |
+| `SyncStatusButton`, `SyncStatusTile`, `SyncStatusBanner` | Sync indicator (icon button / sidebar row / phone strip) |
+
+```dart
+ResponsiveScaffold(
+  appBar: AppBar(title: Text(subject.title)),
+  maxWidth: ContentWidth.wide,
+  scrollable: true,
+  body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    SectionHeader(
+      title: 'Notes', count: notes.length,
+      trailing: TextButton.icon(onPressed: newNote,
+          icon: const Icon(Icons.add, size: 18), label: const Text('New')),
+    ),
+    if (notes.isEmpty)
+      const EmptyState(compact: true, icon: Icons.description_outlined,
+          title: 'No notes yet')
+    else
+      for (final n in notes)
+        ListRowTile(
+          leading: SubjectColorDot(color: subject.color),
+          title: Text(n.title),
+          subtitle: Text('Edited ${formatRelativeTime(n.updatedAt)}'),
+          onTap: () => context.push(AppRoutes.note(n.id)),
+          actions: [IconButton(tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () {})],
+        ),
+    Gaps.h16,
+    LockedFeature(
+      locked: !aiReady,
+      tooltip: 'Set up AI to generate',
+      onTap: () => showSetUpAiSheet(context),
+      child: FilledButton.tonalIcon(onPressed: generate,
+          icon: const Icon(Icons.auto_awesome_outlined), label: const Text('Generate quiz')),
+    ),
+  ]),
+)
+```
+
+**AppShell**: phones (< 720) use a bottom `NavigationBar` (hairline top
+border) plus the offline/error `SyncStatusBanner`; >= 720 a sidebar-style
+`NavigationRail` (app mark, destinations, sync status + sign-out pinned at the
+bottom), extended with the app name and labels from 1000px. Feature screens
+should not add their own outer navigation; use a flat `AppBar` (no tint) and
+`ResponsiveScaffold`/`ContentContainer` for width.

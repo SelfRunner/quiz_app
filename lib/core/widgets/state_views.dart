@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../theme/app_colors.dart';
+import '../theme/tokens.dart';
 import 'error_message.dart';
 
-/// Centered empty state with an icon, text and an optional action.
+/// Minimal empty state: a thin line icon, a title, an optional message and
+/// action. Centered and scrollable by default; [compact] renders it inline
+/// (e.g. inside a section) with less padding.
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
@@ -11,53 +15,57 @@ class EmptyState extends StatelessWidget {
     required this.title,
     this.message,
     this.action,
+    this.compact = false,
   });
 
   final IconData icon;
   final String title;
   final String? message;
   final Widget? action;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final content = ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 400),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: compact ? 28 : 36, color: colors.faintText),
+          compact ? Gaps.h8 : Gaps.h16,
+          Text(
+            title,
+            style: compact
+                ? theme.textTheme.titleSmall
+                : theme.textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
+          if (message != null) ...[
+            Gaps.h4,
+            Text(
+              message!,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.mutedText,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          if (action != null) ...[compact ? Gaps.h12 : Gaps.h16, action!],
+        ],
+      ),
+    );
+    if (compact) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: Insets.xl),
+        child: Center(child: content),
+      );
+    }
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(32),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 36,
-                backgroundColor: theme.colorScheme.primaryContainer,
-                child: Icon(
-                  icon,
-                  size: 36,
-                  color: theme.colorScheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                title,
-                style: theme.textTheme.titleLarge,
-                textAlign: TextAlign.center,
-              ),
-              if (message != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  message!,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-              if (action != null) ...[const SizedBox(height: 20), action!],
-            ],
-          ),
-        ),
+        padding: const EdgeInsets.all(Insets.xxl),
+        child: content,
       ),
     );
   }
@@ -93,17 +101,22 @@ class AsyncValueView<T> extends StatelessWidget {
     required this.value,
     required this.data,
     this.onRetry,
+    this.loading,
   });
 
   final AsyncValue<T> value;
   final Widget Function(T data) data;
   final VoidCallback? onRetry;
 
+  /// Shown while loading without data (defaults to a centered spinner; e.g.
+  /// pass `const LoadingSkeleton()` for lists).
+  final Widget? loading;
+
   @override
   Widget build(BuildContext context) {
     if (value.hasValue) return data(value.requireValue);
     if (value.hasError) return ErrorView(error: value.error, onRetry: onRetry);
-    return const Center(child: CircularProgressIndicator());
+    return loading ?? const Center(child: CircularProgressIndicator());
   }
 }
 
