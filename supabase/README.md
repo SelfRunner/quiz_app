@@ -11,9 +11,10 @@ supabase/
     20261002000000_init.sql           tables, triggers, RLS, helpers, RPCs, grants
     20261002000100_storage.sql        note-images bucket + storage.objects policies
     20261003000000_hardening.sql      confirmed-email sharing, soft-delete hardening
+    20261004000000_attachments.sql    subject attachments (table, RLS, bucket, copy_subject)
   tests/
-    01_rls.sql  02_rpc.sql  03_storage.sql  04_hardening.sql
-                                      pgTAP tests (171 assertions)
+    01_rls.sql  02_rpc.sql  03_storage.sql  04_hardening.sql  05_attachments.sql
+                                      pgTAP tests (244 assertions)
     local_stubs/                      LOCAL VALIDATION ONLY (plain Postgres)
 ```
 
@@ -29,9 +30,10 @@ supabase db push            # applies supabase/migrations in order
 
 **SQL editor (no CLI)**: open the project's SQL editor and run
 `migrations/20261002000000_init.sql`, then `migrations/20261002000100_storage.sql`,
-then `migrations/20261003000000_hardening.sql`, each as one script, in that
-order. Projects that already ran the first two only need to run
-`20261003000000_hardening.sql` (it is safe to run more than once).
+then `migrations/20261003000000_hardening.sql`, then
+`migrations/20261004000000_attachments.sql`, each as one script, in that
+order. A project that already ran some of them only needs the later ones
+(the hardening and attachments migrations are safe to run more than once).
 
 After applying, in the dashboard:
 - Authentication → Providers → Email: enabled (email/password).
@@ -101,7 +103,8 @@ delete them under Authentication -> Users.
 | `profiles` | `id` = `auth.users.id`; `email`, `display_name`. Created by trigger on signup (`raw_user_meta_data->>'display_name'`, fallback: email local part); email kept in sync. Only `display_name` is client-updatable. |
 | `subjects`, `notes`, `quizzes`, `quiz_attempts` | Synced tables: client `id`/`created_at` accepted, `owner_id` defaults to `auth.uid()`, `updated_at` forced to server `now()`, soft delete via `deleted_at`. |
 | `shares` | `(resource_type, resource_id, recipient_id)` unique; `resource_type` is the enum `share_resource_type` (`subject`/`note`/`quiz`, same JSON strings as a text column). FKs `shares_owner_id_fkey` / `shares_recipient_id_fkey` → `profiles`. |
-| `note_image_copies` | Per-user queue of Storage copies produced by `copy_*` (see below). |
+| `attachments` | Files attached to a subject ("Files" library). Synced table like `notes`; blob in bucket `attachments` at `storage_path`. See *Attachments*. |
+| `note_image_copies` | Per-user queue of Storage copies produced by `copy_*` (see below); `bucket` says which bucket (`note-images` default, or `attachments`). |
 | `share_details` (view) | `shares` + `resource_title`, `security_invoker` (caller's RLS applies). |
 
 Constraints enforced server-side (rejected with SQLSTATE `42501` unless noted):
@@ -140,6 +143,7 @@ caller holds a share whose `owner_id` equals the row's owner and that targets:
 | quiz_attempts | owner only (quiz owners cannot see others' attempts) | owner only; INSERT also needs `can_read_quiz(quiz_id)` |
 | shares | owner or recipient | INSERT: `owner_id = auth.uid()`, recipient ≠ self and has a confirmed email, caller owns the resource and neither it nor a parent is soft-deleted. DELETE: owner. No UPDATE. |
 | profiles | self, or the other party of a share in either direction | UPDATE `display_name` of self |
+| attachments | owner, or `can_read_attachment(id)`: live attachment (`deleted_at is null`) whose subject passes `can_read_subject` (subject shares only) | owner only; subject must be owned by the same user |
 | note_image_copies | owner | INSERT (own folder only) / DELETE by owner |
 
 `anon` has no table or function privileges. Supabase's default grants
@@ -186,7 +190,7 @@ so the migration only enables it and emits a NOTICE.
 | RPC | Returns | Notes |
 |---|---|---|
 | `find_user_by_email(p_email text)` | `table(id uuid, display_name text, email text)` | Exact, case-insensitive, trimmed match among users with a confirmed email (`auth.users.email_confirmed_at is not null`); 0 or 1 row; no wildcards. `email` is an extra column (superset of CONTRACTS.md). |
-| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`; the subject must not be deleted. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes, `note_id` remapped) and non-deleted subject-level quizzes. |
+| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`; the subject must not be deleted. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes, `note_id` remapped), non-deleted subject-level quizzes and non-deleted attachments (blobs queued, see below). |
 | `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; the note and its subject must not be deleted; target subject must be owned by the caller and not deleted. Also copies the note's non-deleted quizzes. |
 | `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new quiz id) | Needs `can_read_quiz`; the quiz, its subject and (if any) its note must not be deleted; target subject owned; target note (optional) owned, not deleted and in the target subject. |
 
@@ -215,6 +219,14 @@ underlying file is useless), so copying is split:
 Until a copy completes, the image in the copied note is missing; if access is
 revoked before the client copies, the image stays missing (no data leak).
 
+`copy_subject` also copies attachment rows and queues their blobs in the same
+table with `bucket = 'attachments'` (note images have `bucket = 'note-images'`,
+the column default). The client must copy each row **in the bucket named by
+`bucket`** (see *Attachments*). Clients built before this column existed
+copy every row in `note-images`; for an `attachments` row that fails
+(source not found) and they delete it, so the copied attachment's blob stays
+missing until the user re-uploads it. No data leaks either way.
+
 ## Storage
 
 Bucket `note-images` is private (10 MiB, `image/*`). Object path
@@ -229,6 +241,54 @@ Bucket `note-images` is private (10 MiB, `image/*`). Object path
   non-owners, recipients lose access to their images at the same time.
 - Uploads are not tied to an existing note row (images may be uploaded before
   the note syncs). Use signed URLs or authenticated downloads to read.
+
+Bucket `attachments` (50 MiB, any type, path
+`{owner_id}/{subject_id}/{attachment_id}/{file}`) is described under
+*Attachments* below.
+
+## Attachments (`20261004000000_attachments.sql`)
+
+Files attached to a subject (PDF, images, text, docx, audio, video). Contract
+for the Dart side: `docs/CONTRACTS.md` → *Attachments*.
+
+- `public.attachments(id, subject_id, owner_id, name, mime_type, size_bytes,
+  kind, storage_path, extracted_text, created_at, updated_at, deleted_at)`;
+  same sync conventions as `notes` (client id/created_at, server
+  `updated_at`, immutable `owner_id`, soft delete). The subject must exist
+  (`23503`) and be owned by the same user (`42501`). `subject_id` and
+  `storage_path` are immutable (`42501`): an attachment cannot move to
+  another subject (copy it instead).
+- CHECKs (`23514`): `kind in ('pdf','image','text','docx','audio','video','other')`,
+  `extracted_text` ≤ 200 000 characters, `size_bytes >= 0`, `name` 1..512
+  chars, and `storage_path` must be exactly
+  `{owner_id}/{subject_id}/{id}/{file}` (lowercase uuids as Postgres prints
+  them, `{file}` one non-empty segment, not `.`/`..`, ≤ 1024 chars total).
+- Read access: owner (including own tombstones), or a recipient of a
+  **subject** share while the attachment and the subject are not
+  soft-deleted (`can_read_attachment`). Note and quiz shares never expose
+  attachments. Attachments are not a share resource themselves, so no
+  share-deletion trigger is needed: soft-deleting an attachment hides it from
+  recipients at once, and soft-deleting the subject deletes the subject's
+  shares (hardening trigger). Hard-deleting a subject cascades to its
+  attachment rows (blobs are not removed by SQL).
+- Bucket `attachments`: private, 50 MiB per file, any MIME type. Path
+  `{owner_id}/{subject_id}/{attachment_id}/{file}`. INSERT/UPDATE/DELETE: first
+  segment = `auth.uid()`. SELECT: own folder, or
+  `can_read_attachment_object(name)`: exactly four segments, segments 2 and 3
+  valid uuids (checked before casting; malformed paths return false), an
+  attachment row exists with that exact `storage_path`, owned by segment 1
+  and in subject segment 2, and the caller passes `can_read_attachment`.
+  Blobs without a row, blobs of soft-deleted attachments and blobs planted in
+  someone else's folder are never exposed to non-owners.
+- `supabase/config.toml` raises the local stack's global upload limit to
+  50 MiB to match (the hosted project's global limit under Storage settings
+  must also be ≥ 50 MiB, the free-plan maximum).
+- `copy_subject` (replaced with `create or replace`) additionally copies the
+  subject's non-deleted attachments: new ids, `owner_id` = caller,
+  `storage_path = {caller}/{new_subject}/{new_id}/{same file segment}`, all
+  other columns copied, and one `note_image_copies` row per attachment with
+  `bucket = 'attachments'`, `from_path` = source path, `to_path` = new path.
+  `copy_note` / `copy_quiz` never copy attachments.
 
 ## Hardening migration (`20261003000000_hardening.sql`)
 
