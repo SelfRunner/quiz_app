@@ -41,6 +41,18 @@ _QuizAttempt _$QuizAttemptFromJson(Map<String, dynamic> json) => _QuizAttempt(
   completedAt: json['completed_at'] == null
       ? null
       : DateTime.parse(json['completed_at'] as String),
+  mode:
+      $enumDecodeNullable(
+        _$AttemptModeEnumMap,
+        json['mode'],
+        unknownValue: AttemptMode.practice,
+      ) ??
+      AttemptMode.practice,
+  timeLimitSeconds: (json['time_limit_seconds'] as num?)?.toInt(),
+  questionIds: (json['question_ids'] as List<dynamic>?)
+      ?.map((e) => e as String)
+      .toList(),
+  durationSeconds: (json['duration_seconds'] as num?)?.toInt(),
   createdAt: DateTime.parse(json['created_at'] as String),
   updatedAt: DateTime.parse(json['updated_at'] as String),
   deletedAt: json['deleted_at'] == null
@@ -58,7 +70,17 @@ Map<String, dynamic> _$QuizAttemptToJson(_QuizAttempt instance) =>
       'total': instance.total,
       'started_at': instance.startedAt.toIso8601String(),
       'completed_at': instance.completedAt?.toIso8601String(),
+      'mode': _$AttemptModeEnumMap[instance.mode]!,
+      'time_limit_seconds': instance.timeLimitSeconds,
+      'question_ids': instance.questionIds,
+      'duration_seconds': instance.durationSeconds,
       'created_at': instance.createdAt.toIso8601String(),
       'updated_at': instance.updatedAt.toIso8601String(),
       'deleted_at': instance.deletedAt?.toIso8601String(),
     };
+
+const _$AttemptModeEnumMap = {
+  AttemptMode.practice: 'practice',
+  AttemptMode.exam: 'exam',
+  AttemptMode.mistakes: 'mistakes',
+};

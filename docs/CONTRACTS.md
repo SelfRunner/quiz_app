@@ -63,13 +63,19 @@ JSON keys are snake_case versions of the field names. `?` = nullable.
 | `Question` | `id, type (QuestionType), prompt, options (List<String>), correctIndices (List<int>), answerText?, explanation?` |
 | `QuestionType` | `mcqSingle 'mcq_single'`, `mcqMulti 'mcq_multi'`, `trueFalse 'true_false'`, `shortAnswer 'short_answer'`; `wireName`, `hasOptions` |
 | `QuizSource` | `contextText?, youtubeUrl?, provider? (LlmProviderId.wireName), model?, notes (List<QuizSourceRef{id, name}>, default []), attachments (List<QuizSourceRef>, default [])` (Wave 1: notes/attachments used as AI sources) |
-| `QuizAttempt` : Syncable | `id, quizId, ownerId (the attempting user), answers (List<QuestionAnswer>), score (double), total (int), startedAt, completedAt?, createdAt, updatedAt, deletedAt?` |
+| `QuizAttempt` : Syncable | `id, quizId, ownerId (the attempting user), answers (List<QuestionAnswer>), score (double), total (int), startedAt, completedAt?, mode (AttemptMode, default practice), timeLimitSeconds?, questionIds? (List<String>), durationSeconds?, createdAt, updatedAt, deletedAt?` (exam fields: Wave 2) |
+| `AttemptMode` | `practice`, `exam`, `mistakes` (JSON = name; missing/unknown -> practice) |
 | `QuestionAnswer` | `questionId, selectedIndices (List<int>), textAnswer?, isCorrect? (null = ungraded)` |
 | `Share` | `id, ownerId, recipientId, resourceType (ShareResourceType), resourceId, createdAt`; read-only joins (not in `toJson`): `recipient? (Profile), owner? (Profile), resourceTitle?` |
-| `ShareResourceType` | `subject`, `note`, `quiz` (JSON = name) |
+| `ShareResourceType` | `subject`, `note`, `quiz`, `deck` (JSON = name; `deck` since Wave 2) |
+| `Deck` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), cards (List<Flashcard>), createdAt, updatedAt, deletedAt?` |
+| `Flashcard` | `id, front, back, hint?` (`id` stable, unique in the deck, <= 255 chars) |
+| `CardReview` : Syncable | `id (uuid v5, CardReview.idFor), ownerId, deckId, cardId, state (CardState), dueAt, stability, difficulty, elapsedDays, scheduledDays, reps, lapses, lastReviewAt?, createdAt, updatedAt, deletedAt?`; `toFsrs()`, `withFsrs(card)` |
+| `CardState` / `Rating` | `lib/study/fsrs.dart` (re-exported by `card_review.dart`): `newCard 0, learning 1, review 2, relearning 3` (JSON = int); `again 1, hard 2, good 3, easy 4` |
+| `Mistake` : Syncable | `id (uuid v5, Mistake.idFor), ownerId, quizId, questionId, wrongCount, correctStreak, lastWrongAt?, resolvedAt?, createdAt, updatedAt, deletedAt?`; `isOpen`, `resolveAfterCorrect = 2` |
 | `OutboxOp` | `id, table (String), op (OutboxOpType), rowId, payload? (Map), createdAt, attempts (default 0), lastError?` |
 | `OutboxOpType` | `upsert`, `delete` (hard delete, reserved), `uploadImage 'upload_image'`, `deleteImage 'delete_image'`, `uploadAttachment 'upload_attachment'`, `deleteAttachment 'delete_attachment'` |
-| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, attachments, noteImagesBucket='note-images', attachmentsBucket='attachments'`; `synced` = [subjects, notes, quizzes, quiz_attempts, attachments] |
+| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, attachments, decks, cardReviews='card_reviews', mistakes, noteImagesBucket='note-images', attachmentsBucket='attachments'`; `synced` = [subjects, notes, quizzes, quiz_attempts, attachments, decks, card_reviews, mistakes]; `privateStudy` = {card_reviews, mistakes} |
 | `Attachment` : Syncable | `id, subjectId, ownerId, name, mimeType?, sizeBytes (default 0), kind (AttachmentKind, default other), storagePath, extractedText?, createdAt, updatedAt, deletedAt?`; `fileName` (last path segment); statics `maxSizeBytes` (50 MiB), `maxExtractedTextLength` (200 000), `maxNameLength` (512), `buildStoragePath(...)`, `sanitizeFileName(name)` |
 | `AttachmentKind` | `pdf, image, text, docx, audio, video, other` (JSON = name, unknown -> other); `AttachmentKind.detect(fileName:, mimeType?)` (extension first, then MIME). Top-level helpers `fileExtension(name)`, `mimeTypeForFileName(name)` |
 | `NoteImageRef` (plain) | `ownerId, noteId, fileName`; `storagePath = '{owner}/{note}/{file}'`, `markdownUrl = 'note-image://{storagePath}'`, `tryParse(String)` |
@@ -329,6 +335,135 @@ such share rows instead of failing to parse.
    (bad cards JSON, `state`, `mode`, negative counters), `23505` (duplicate
    review/mistake key, see 3), `23503` (parent not synced yet: defer).
 
+### Study client API (Wave 2, data layer — implemented)
+
+Code: models in `lib/data/models/{deck,card_review,mistake}.dart`; repositories
+in `lib/data/repositories/` (`DeckRepository`, `ReviewRepository`,
+`MistakeRepository`, `StudyActivityRepository` + `Local*` impls); pure logic
+in `lib/study/` (`fsrs.dart`, `due_queue.dart`, `stats.dart`, `exam.dart`,
+`local_day.dart`, `study_settings.dart`); dashboard provider in
+`lib/study/study_providers.dart`. `lib/study/*.dart` (except the providers
+file) is pure Dart, no Flutter/Hive.
+
+```dart
+abstract interface class DeckRepository {     // own + shared; shared = read-only
+  Stream<List<Deck>> watchBySubject(String subjectId);   // incl. note decks, updatedAt desc
+  Stream<List<Deck>> watchByNote(String noteId);
+  Stream<List<Deck>> watchAllAccessible();
+  Stream<Deck?> watchById(String id);
+  Future<Deck?> getById(String id);
+  Future<Deck> create({required String subjectId, String? noteId, required String title,
+      String? description, List<Flashcard> cards = const [], QuizSource? source});
+  Future<Deck> update(Deck deck);               // cards/title/...; same parent rules as quizzes
+  Future<void> delete(String id);               // soft; review rows kept (hidden)
+}
+abstract interface class ReviewRepository {    // private FSRS state of the current user
+  Future<CardReview> recordReview({required String deckId, required String cardId, required Rating rating});
+  Future<Map<Rating, DateTime>> previewDue({required String deckId, required String cardId}); // button labels
+  Stream<DueQueue> watchDue({DateTime? now, String? deckId});   // "Due today"
+  Stream<int> watchDueCount({DateTime? now});
+  Stream<DeckStats> watchDeckStats(String deckId, {DateTime? now});
+  Stream<List<CardReview>> watchAll();          // live rows of readable decks
+  Future<void> resetCard({required String deckId, required String cardId});  // back to new
+}
+abstract interface class MistakeRepository {   // private "Mistakes" set
+  Future<Mistake?> recordAnswer({required String quizId, required String questionId, required bool correct});
+  Future<void> recordAttempt(QuizAttempt attempt);  // every graded answer of an attempt
+  Stream<List<MistakeGroup>> watchOpen();       // grouped by quiz, newest wrong first
+  Stream<int> watchOpenCount();
+  Future<void> resolve({required String quizId, required String questionId});  // "I know this"
+}
+// MistakeGroup { Quiz quiz; List<MistakeEntry> entries; List<Question> questions; DateTime? lastWrongAt }
+// MistakeEntry { Mistake mistake; Question question }
+abstract interface class StudyActivityRepository { Stream<StudySnapshot> watchSnapshot(); }
+```
+
+**Flashcards / FSRS** (`lib/study/fsrs.dart`): FSRS-5 (19 default weights,
+FSRS-4.5-compatible formulas), desired retention 0.9, learning steps 1m/10m,
+relearning step 10m, max interval 36 500 days, optional fuzz. Verified
+against py-fsrs 5.1.3 (`test/study/fsrs_reference_data.dart`).
+`Fsrs({weights, desiredRetention, learningSteps, relearningSteps,
+maximumInterval, enableFuzz = false, random})`, `review(FsrsCard, Rating,
+DateTime now) -> FsrsCard`, `preview(card, now)`, `retrievability(card,
+now)`, `nextIntervalDays(stability)`, `currentStep(card)`. Never-reviewed
+cards are `CardState.newCard`; the (re)learning step is not stored (no
+column) but derived from `due - lastReview` (steps must be strictly
+increasing). `reps++` per review, `lapses++` on review -> again.
+- `recordReview` uses `StudySettings` (`newCardsPerDay` default 20,
+  `desiredRetention` 0.9, `fuzz` true; Hive `prefs` key `study_settings`;
+  `ref.read(studySettingsProvider.notifier).setNewCardsPerDay(n)` /
+  `setDesiredRetention(r)` / `set(settings)`). Works on own and shared decks
+  (the row is the user's); `NotFoundException` if the deck or card is gone.
+- Row id = `CardReview.idFor(ownerId:, deckId:, cardId:)` (uuid v5 per the
+  contract above), so devices converge; an existing row with another id for
+  the same card (adopted after a `23505`) is reused.
+- `DueQueue { dueNow, newCards, laterToday, newIntroducedToday,
+  newRemainingToday, unseenTotal; all, count, next, isEmpty }`: `dueNow` =
+  reviewed cards with `dueAt <= now` (oldest first), `newCards` = unseen
+  cards in deck order (decks by `createdAt`) limited to `newCardsPerDay`
+  minus rows first created today, `laterToday` = due later today (learning
+  steps). Study order = `all`; show `next` (null = nothing due right now).
+  "Today" = local calendar day (`lib/study/local_day.dart`; repositories
+  accept `toLocal` for tests). Reviews of removed cards and of decks that
+  aren't live/cached are ignored (rows kept). `DueCard { deck, card,
+  review?, isNew, dueAt, state, key }`.
+- `DeckStats { total, newCount, learning, review, mature (interval >= 21 d),
+  dueToday, lapses }`.
+
+**Mistakes**: `recordAnswer` — wrong: upsert `wrongCount++`,
+`correctStreak = 0`, `resolvedAt = null`, `lastWrongAt = now` (creates the
+row, id `Mistake.idFor(...)`); correct while open: `correctStreak++`,
+resolved after 2 consecutive correct; correct with no open row: no write.
+Call `recordAttempt(attempt)` after saving any completed attempt (practice,
+exam or mistakes mode). `watchOpen` resolves questions from the cached quiz
+(hidden when the quiz isn't cached or the question was removed). A
+mistakes-practice session: take `group.questions` and start an attempt per
+quiz with `mode: AttemptMode.mistakes, questionIds: [...]`.
+
+**Exam mode** (`lib/study/exam.dart`): `selectQuestionPool(questions,
+{count, random})` (random N, seedable) -> `attempts.start(quizId:, total:
+pool.length, mode: AttemptMode.exam, timeLimitSeconds:, questionIds: ids)`;
+`questionsForAttempt(quiz, attempt)`, `gradeAnswer(question, answer)`,
+`scoreExam(questions, answers) -> (answers: graded, score: ExamScore{correct,
+total, answered, ungraded, unanswered, fraction, percent})`,
+`examTimeRemaining(attempt, now)`, `isExamExpired`, `examDurationSeconds`,
+`completeExam(attempt, questions:, answers:, now:)` (sets answers, score,
+total, completedAt, durationSeconds) -> `attempts.save(...)`.
+
+**Dashboard** (`dashboardStatsProvider`; pure `computeDashboard(snapshot,
+now:, newCardsPerDay:)` in `lib/study/stats.dart`): `DashboardStats { streak
+(StreakInfo{current, longest, activeToday}), quizzesTaken, overallAccuracy
+(Accuracy{correct, answered, ratio}), accuracyBySubject
+(List<SubjectAccuracy{subjectId, title, color, accuracy, attempts}>, by
+title), weakestQuestions (List<WeakQuestion{quizId, quizTitle, subjectId,
+questionId, prompt, accuracy}>, >= 2 answers, lowest first, max 5),
+weakestQuizzes (List<WeakQuiz>), due (DueQueue), dueCards, reviewsToday,
+openMistakes, recentActivity (List<ActivityItem>: sealed, QuizActivity{attempt,
+quizTitle, subjectId, mode, at} | ReviewActivity{deckId, deckTitle,
+subjectId, day, cards, at}, newest first, max 20) }`. Streak days = local
+days with a completed attempt (or an answered in-progress one) or a card
+review; only the first and last review day of each card is stored, so
+review-only streaks can undercount. The individual functions
+(`computeStreak`, `activityDays`, `accuracyBySubject`, `weakestQuestions`,
+`weakestQuizzes`, `recentActivity`, `quizzesTaken`, `overallAccuracy`) are
+public.
+
+**Sync of the new tables** (`DefaultSyncEngine`): `decks`, `card_reviews`,
+`mistakes` are pulled/pushed like the others (own keyset cursors). Decks are
+shared like quizzes: a subject share backfills decks by `subject_id`, a note
+share by `note_id`, a deck share by id; reconciliation covers decks; other
+users' tombstones are purged, own ones kept. Soft-deleting a subject/note
+cascades to its owned decks; moving a note moves its decks. Private rows: a
+`23505` on a `card_reviews`/`mistakes` upsert fetches the row holding the
+natural key, re-keys the local row to its id (keeping `created_at`) and
+re-pushes; a `42501` (deck/quiz no longer readable) drops the op quietly (no
+rejection reported). Reconciliation purges own review/mistake rows whose
+deck/quiz is not cached **and** that the server no longer returns (parent
+hard-deleted, or the row was never accepted); rows the server keeps (access
+revoked) stay hidden. `copyToMyAccount(resourceType: ShareResourceType.deck,
+resourceId:, targetSubjectId:, targetNoteId?)` calls `copy_deck`. Share rows
+of unknown resource types are ignored by `sharedWithMe` / `listSharesFor`.
+
 ## Local storage (`lib/data/local/hive_boxes.dart`)
 
 `HiveBoxes.init()` (called from bootstrap) runs `Hive.initFlutter('quiz_app')`,
@@ -341,8 +476,10 @@ id, FIFO by `createdAt`), `sync_meta` (cursors e.g. `cursor:{table}`), `prefs`
 boxes (e.g. image bytes cache) in `init()`. Added: `note_image_bytes`
 (`Box<Uint8List>`, web image cache), `attachments` (`Box<String>`, user
 scoped) and `attachment_bytes` (`LazyBox<Uint8List>`, web attachment cache;
-native uses files under `{app support}/attachments`); sign-out clearing is
-done by the sync engine (see Data layer notes).
+native uses files under `{app support}/attachments`); Wave 2: `decks`,
+`card_reviews`, `mistakes` (`Box<String>`, user scoped); `prefs` key
+`study_settings`. Sign-out clearing is done by the sync engine (see Data
+layer notes).
 
 ## Interfaces
 
@@ -397,7 +534,9 @@ abstract interface class AttemptRepository {
   Stream<List<QuizAttempt>> watchByQuiz(String quizId);  // current user, newest first
   Stream<QuizAttempt?> watchById(String id);
   Future<QuizAttempt?> getById(String id);
-  Future<QuizAttempt> start({required String quizId, required int total});
+  Future<QuizAttempt> start({required String quizId, required int total,
+      AttemptMode mode = AttemptMode.practice, int? timeLimitSeconds,
+      List<String>? questionIds});                      // exam params: Wave 2
   Future<QuizAttempt> save(QuizAttempt attempt);
   Future<void> delete(String id);
 }
@@ -410,7 +549,7 @@ abstract interface class ShareRepository {    // online-only (sharedWithMe: offl
   Future<List<Share>> sharedWithMe();
   Future<String> copyToMyAccount({required ShareResourceType resourceType, required String resourceId,
       String? targetSubjectId, String? targetNoteId});   // returns new id, triggers sync
-}
+}   // decks: like quizzes (targetSubjectId required, optional targetNoteId), see "Study client API"
 
 abstract interface class AttachmentRepository {   // added Wave 1, see "Attachments (client)"
   static const int maxSizeBytes;                 // 50 MiB
@@ -536,6 +675,15 @@ should resolve the provider/model before calling so it knows what was used.
 | `attachmentProvider(id)` | same | `StreamProvider.autoDispose.family<Attachment?, String>` |
 | `attachmentUploadProvider(attachmentId)` | same | `StreamProvider.autoDispose.family<AttachmentUploadState, String>` |
 | `accessibleNotesProvider` | same | `StreamProvider.autoDispose<List<Note>>` (own + shared, updatedAt desc) |
+| `deckRepositoryProvider`, `reviewRepositoryProvider`, `mistakeRepositoryProvider`, `studyActivityRepositoryProvider` | same | `Provider<...>` (Wave 2, see *Study client API*) |
+| `studySettingsProvider` | same | `NotifierProvider<StudySettingsController, StudySettings>` |
+| `decksBySubjectProvider(subjectId)`, `decksByNoteProvider(noteId)` | same | `StreamProvider.autoDispose.family<List<Deck>, String>` |
+| `accessibleDecksProvider` / `deckProvider(id)` | same | `StreamProvider.autoDispose<List<Deck>>` / `.family<Deck?, String>` |
+| `dueQueueProvider` / `deckDueQueueProvider(deckId)` | same | `StreamProvider.autoDispose<DueQueue>` / `.family<DueQueue, String>` |
+| `dueCountProvider`, `openMistakeCountProvider` | same | `StreamProvider.autoDispose<int>` |
+| `deckStatsProvider(deckId)` | same | `StreamProvider.autoDispose.family<DeckStats, String>` |
+| `openMistakesProvider` | same | `StreamProvider.autoDispose<List<MistakeGroup>>` |
+| `dashboardStatsProvider` | `lib/study/study_providers.dart` | `StreamProvider.autoDispose<DashboardStats>` |
 | `noteSearchProvider(query)` | same | `Provider.autoDispose.family<AsyncValue<List<Note>>, String>` (filtered `accessibleNotesProvider`) |
 | `apiKeyStoreProvider`, `llmProviderFactoryProvider`, `transcriptServiceProvider`, `aiServiceProvider` | `lib/ai/ai_providers.dart` | `Provider<...>` (implemented) |
 | `aiHttpClientProvider` | `lib/ai/ai_providers.dart` | `Provider<http.Client>` (override with `MockClient` in tests) |

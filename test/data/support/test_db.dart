@@ -41,17 +41,24 @@ class TestHive {
     db = await openDb();
   }
 
-  Future<LocalDatabase> openDb() async => LocalDatabase(
-    subjectsBox: await Hive.openBox<String>('subjects'),
-    notesBox: await Hive.openBox<String>('notes'),
-    quizzesBox: await Hive.openBox<String>('quizzes'),
-    attemptsBox: await Hive.openBox<String>('quiz_attempts'),
-    attachmentsBox: await Hive.openBox<String>('attachments'),
-    outboxBox: await Hive.openBox<String>('outbox'),
-    syncMetaBox: await Hive.openBox<String>('sync_meta'),
-    images: HiveImageCache(await Hive.openBox<Uint8List>('note_image_bytes')),
+  /// Opens a database; a [suffix] gives a second, independent device
+  /// (separate boxes) in the same Hive directory.
+  Future<LocalDatabase> openDb({String suffix = ''}) async => LocalDatabase(
+    subjectsBox: await Hive.openBox<String>('subjects$suffix'),
+    notesBox: await Hive.openBox<String>('notes$suffix'),
+    quizzesBox: await Hive.openBox<String>('quizzes$suffix'),
+    attemptsBox: await Hive.openBox<String>('quiz_attempts$suffix'),
+    attachmentsBox: await Hive.openBox<String>('attachments$suffix'),
+    decksBox: await Hive.openBox<String>('decks$suffix'),
+    cardReviewsBox: await Hive.openBox<String>('card_reviews$suffix'),
+    mistakesBox: await Hive.openBox<String>('mistakes$suffix'),
+    outboxBox: await Hive.openBox<String>('outbox$suffix'),
+    syncMetaBox: await Hive.openBox<String>('sync_meta$suffix'),
+    images: HiveImageCache(
+      await Hive.openBox<Uint8List>('note_image_bytes$suffix'),
+    ),
     attachmentFiles: LazyHiveBlobCache(
-      await Hive.openLazyBox<Uint8List>('attachment_bytes'),
+      await Hive.openLazyBox<Uint8List>('attachment_bytes$suffix'),
     ),
     clock: clock.call,
     newId: ids.call,

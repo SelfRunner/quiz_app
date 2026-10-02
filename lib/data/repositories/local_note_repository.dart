@@ -84,6 +84,14 @@ class LocalNoteRepository implements NoteRepository {
           quiz.copyWith(subjectId: note.subjectId, updatedAt: now),
         );
       }
+      // So do its decks (the server enforces the same).
+      for (final deck in _ctx.db.decks.where((d) => d.noteId == note.id)) {
+        if (!deck.isOwnedBy(userId)) continue;
+        await _ctx.save(
+          _ctx.db.decks,
+          deck.copyWith(subjectId: note.subjectId, updatedAt: now),
+        );
+      }
     }
     return next;
   }

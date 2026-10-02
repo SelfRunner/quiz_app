@@ -134,12 +134,18 @@ class FakeAttemptRepository implements AttemptRepository {
   Future<QuizAttempt> start({
     required String quizId,
     required int total,
+    AttemptMode mode = AttemptMode.practice,
+    int? timeLimitSeconds,
+    List<String>? questionIds,
   }) async {
     final a = QuizAttempt(
       id: nextId(),
       quizId: quizId,
       ownerId: userId,
       total: total,
+      mode: mode,
+      timeLimitSeconds: timeLimitSeconds,
+      questionIds: questionIds,
       startedAt: fixedNow,
       createdAt: fixedNow,
       updatedAt: fixedNow,

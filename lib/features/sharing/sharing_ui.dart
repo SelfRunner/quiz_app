@@ -19,6 +19,7 @@ extension ShareResourceTypeUi on ShareResourceType {
     ShareResourceType.subject => 'subject',
     ShareResourceType.note => 'note',
     ShareResourceType.quiz => 'quiz',
+    ShareResourceType.deck => 'deck',
   };
 
   /// Section title, e.g. "Subjects".
@@ -26,12 +27,14 @@ extension ShareResourceTypeUi on ShareResourceType {
     ShareResourceType.subject => 'Subjects',
     ShareResourceType.note => 'Notes',
     ShareResourceType.quiz => 'Quizzes',
+    ShareResourceType.deck => 'Decks',
   };
 
   IconData get icon => switch (this) {
     ShareResourceType.subject => Icons.library_books_outlined,
     ShareResourceType.note => Icons.description_outlined,
     ShareResourceType.quiz => Icons.quiz_outlined,
+    ShareResourceType.deck => Icons.style_outlined,
   };
 
   /// What recipients get when this kind of resource is shared.
@@ -46,6 +49,10 @@ extension ShareResourceTypeUi on ShareResourceType {
     ShareResourceType.quiz =>
       'Recipients can view and take this quiz (their attempts stay private). '
           'They can\'t edit it, but they can copy it into their own account.',
+    ShareResourceType.deck =>
+      'Recipients can view and study this deck (their progress stays '
+          'private). They can\'t edit it, but they can copy it into their own '
+          'account.',
   };
 }
 

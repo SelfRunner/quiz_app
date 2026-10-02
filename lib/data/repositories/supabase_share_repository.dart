@@ -123,7 +123,7 @@ class SupabaseShareRepository implements ShareRepository {
         resourceId: resourceId,
       ),
     );
-    final shares = rows.map(Share.fromJson).toList();
+    final shares = [for (final r in rows) ?_tryShare(r)];
     final missing = [
       for (final s in shares)
         if (s.recipient == null) s.recipientId,
@@ -143,7 +143,8 @@ class SupabaseShareRepository implements ShareRepository {
     try {
       await _requireOnline();
       final rows = await _call(() => _remote.sharesForRecipient(userId));
-      final shares = rows.map(Share.fromJson).toList();
+      // Rows of resource types this build doesn't know are ignored.
+      final shares = [for (final r in rows) ?_tryShare(r)];
       final profiles = await _profiles([
         for (final s in shares)
           if (s.owner == null) s.ownerId,
@@ -275,9 +276,10 @@ class SupabaseShareRepository implements ShareRepository {
       );
       _ctx.ensureOwned(subject, userId, 'subject');
       if (targetNoteId != null) {
-        if (resourceType != ShareResourceType.quiz) {
+        if (resourceType != ShareResourceType.quiz &&
+            resourceType != ShareResourceType.deck) {
           throw const ValidationException(
-            'Only quizzes can be attached to a note.',
+            'Only quizzes and decks can be attached to a note.',
           );
         }
         final note = _ctx.requireLive(_ctx.db.notes, targetNoteId, 'note');
@@ -315,12 +317,14 @@ class SupabaseShareRepository implements ShareRepository {
     ShareResourceType.subject => _ctx.db.subjects.get(id),
     ShareResourceType.note => _ctx.db.notes.get(id),
     ShareResourceType.quiz => _ctx.db.quizzes.get(id),
+    ShareResourceType.deck => _ctx.db.decks.get(id),
   };
 
   static String _tableOf(ShareResourceType type) => switch (type) {
     ShareResourceType.subject => SyncTables.subjects,
     ShareResourceType.note => SyncTables.notes,
     ShareResourceType.quiz => SyncTables.quizzes,
+    ShareResourceType.deck => SyncTables.decks,
   };
 
   String? _localTitle(Share share) =>
@@ -328,6 +332,7 @@ class SupabaseShareRepository implements ShareRepository {
         final Subject s => s.title,
         final Note n => n.title,
         final Quiz q => q.title,
+        final Deck d => d.title,
         _ => null,
       };
 

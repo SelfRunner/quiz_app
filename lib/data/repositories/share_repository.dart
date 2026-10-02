@@ -42,8 +42,10 @@ abstract interface class ShareRepository {
 
   /// Deep-copies a shared resource into the current user's account (via the
   /// `copy_*` RPCs) and triggers a sync. Returns the new resource id.
-  /// [targetSubjectId] is required for notes and quizzes;
-  /// [targetNoteId] optionally attaches a copied quiz to a note.
+  /// [targetSubjectId] is required for notes, quizzes and decks;
+  /// [targetNoteId] optionally attaches a copied quiz or deck to a note
+  /// (which must be in [targetSubjectId]). Copying a subject or note also
+  /// copies its decks (`copy_subject` / `copy_note`).
   Future<String> copyToMyAccount({
     required ShareResourceType resourceType,
     required String resourceId,

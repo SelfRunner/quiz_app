@@ -108,6 +108,10 @@ class FakeRemote
         _shared(ShareResourceType.quiz, row['id'] as String) ||
             _shared(ShareResourceType.subject, row['subject_id'] as String?) ||
             _shared(ShareResourceType.note, row['note_id'] as String?),
+      SyncTables.decks =>
+        _shared(ShareResourceType.deck, row['id'] as String) ||
+            _shared(ShareResourceType.subject, row['subject_id'] as String?) ||
+            _shared(ShareResourceType.note, row['note_id'] as String?),
       // Only through a subject share, while row and subject are live.
       SyncTables.attachments =>
         row['deleted_at'] == null &&
@@ -147,12 +151,17 @@ class FakeRemote
     String? parentId;
     if (table == SyncTables.notes ||
         table == SyncTables.quizzes ||
-        table == SyncTables.attachments) {
+        table == SyncTables.attachments ||
+        table == SyncTables.decks) {
       parentTable = SyncTables.subjects;
       parentId = row['subject_id'] as String?;
-    } else if (table == SyncTables.quizAttempts) {
+    } else if (table == SyncTables.quizAttempts ||
+        table == SyncTables.mistakes) {
       parentTable = SyncTables.quizzes;
       parentId = row['quiz_id'] as String?;
+    } else if (table == SyncTables.cardReviews) {
+      parentTable = SyncTables.decks;
+      parentId = row['deck_id'] as String?;
     }
     if (parentTable != null && !tables[parentTable]!.containsKey(parentId)) {
       throw const RemoteException(
@@ -161,8 +170,48 @@ class FakeRemote
         code: '23503',
       );
     }
+    if (SyncTables.privateStudy.contains(table)) _checkStudyRow(table, row);
     log.add('upsert:$table:$id');
     return _copy(serverWrite(table, row));
+  }
+
+  /// `card_reviews` / `mistakes`: INSERT needs read access to the parent
+  /// (`can_read_deck` / `can_read_quiz`, 42501) and the natural key
+  /// `(owner, parent, child)` is unique (23505).
+  void _checkStudyRow(String table, Map<String, dynamic> row) {
+    final (
+      parentTable,
+      parentColumn,
+      keyColumn,
+    ) = table == SyncTables.cardReviews
+        ? (SyncTables.decks, 'deck_id', 'card_id')
+        : (SyncTables.quizzes, 'quiz_id', 'question_id');
+    final id = row['id'] as String;
+    if (tables[table]![id] == null) {
+      final parent = tables[parentTable]![row[parentColumn]]!;
+      if (parent['deleted_at'] != null && parent['owner_id'] != userId ||
+          !visible(parentTable, parent)) {
+        throw const RemoteException(
+          RemoteErrorKind.permanent,
+          'new row violates row-level security policy',
+          code: '42501',
+        );
+      }
+    }
+    final duplicate = tables[table]!.values.any(
+      (r) =>
+          r['id'] != id &&
+          r['owner_id'] == row['owner_id'] &&
+          r[parentColumn] == row[parentColumn] &&
+          r[keyColumn] == row[keyColumn],
+    );
+    if (duplicate) {
+      throw const RemoteException(
+        RemoteErrorKind.conflict,
+        'duplicate key value violates unique constraint',
+        code: '23505',
+      );
+    }
   }
 
   @override
@@ -375,6 +424,7 @@ class FakeRemote
     final table = switch (row['resource_type']) {
       'subject' => SyncTables.subjects,
       'note' => SyncTables.notes,
+      'deck' => SyncTables.decks,
       _ => SyncTables.quizzes,
     };
     final resource = tables[table]![row['resource_id']];
@@ -481,8 +531,11 @@ class FakeRemote
   }) async {
     _checkOnline();
     rpcCalls.add('copy_${type.wireName}');
+    if (type == ShareResourceType.deck) {
+      return _copyDeck(resourceId, targetSubjectId, targetNoteId);
+    }
     if (type != ShareResourceType.note) {
-      throw UnimplementedError('FakeRemote only copies notes');
+      throw UnimplementedError('FakeRemote only copies notes and decks');
     }
     final src = tables[SyncTables.notes]![resourceId];
     if (src == null || !visible(SyncTables.notes, src)) {
@@ -517,6 +570,45 @@ class FakeRemote
       'owner_id': userId,
       'subject_id': targetSubjectId,
       'content_md': content,
+    });
+    return newId;
+  }
+}
+
+extension on FakeRemote {
+  /// Simulated `copy_deck`: same rules as `copy_quiz`, card ids kept.
+  String _copyDeck(String deckId, String? subjectId, String? noteId) {
+    final src = tables[SyncTables.decks]![deckId];
+    if (src == null ||
+        src['deleted_at'] != null ||
+        !visible(SyncTables.decks, src)) {
+      throw const RemoteException(
+        RemoteErrorKind.permanent,
+        'deck not found',
+        code: 'P0002',
+      );
+    }
+    final subject = tables[SyncTables.subjects]![subjectId];
+    final note = noteId == null ? null : tables[SyncTables.notes]![noteId];
+    if (subject == null ||
+        subject['owner_id'] != userId ||
+        (noteId != null &&
+            (note == null ||
+                note['owner_id'] != userId ||
+                note['subject_id'] != subjectId))) {
+      throw const RemoteException(
+        RemoteErrorKind.permanent,
+        'target not owned',
+        code: '42501',
+      );
+    }
+    final newId = 'copy-of-$deckId';
+    serverWrite(SyncTables.decks, {
+      ...src,
+      'id': newId,
+      'owner_id': userId,
+      'subject_id': subjectId,
+      'note_id': noteId,
     });
     return newId;
   }
@@ -622,4 +714,55 @@ Map<String, dynamic> attachmentRow(
   'created_at': '2026-01-01T00:00:00Z',
   'updated_at': '2026-01-01T00:00:00Z',
   'deleted_at': deletedAt,
+};
+
+Map<String, dynamic> deckRow(
+  String id,
+  String owner,
+  String subjectId, {
+  String? noteId,
+  String title = 'D',
+  List<String> cardIds = const ['c1', 'c2'],
+  String? deletedAt,
+}) => {
+  'id': id,
+  'subject_id': subjectId,
+  'note_id': noteId,
+  'owner_id': owner,
+  'title': title,
+  'description': null,
+  'source': null,
+  'cards': [
+    for (final c in cardIds) {'id': c, 'front': 'F $c', 'back': 'B $c'},
+  ],
+  'created_at': '2026-01-01T00:00:00Z',
+  'updated_at': '2026-01-01T00:00:00Z',
+  'deleted_at': deletedAt,
+};
+
+Map<String, dynamic> reviewRow(
+  String id,
+  String owner,
+  String deckId,
+  String cardId, {
+  int state = 2,
+  String dueAt = '2026-01-05T00:00:00Z',
+  int reps = 1,
+}) => {
+  'id': id,
+  'owner_id': owner,
+  'deck_id': deckId,
+  'card_id': cardId,
+  'state': state,
+  'due_at': dueAt,
+  'stability': 3.0,
+  'difficulty': 5.0,
+  'elapsed_days': 0,
+  'scheduled_days': 3,
+  'reps': reps,
+  'lapses': 0,
+  'last_review_at': '2026-01-02T00:00:00Z',
+  'created_at': '2026-01-02T00:00:00Z',
+  'updated_at': '2026-01-02T00:00:00Z',
+  'deleted_at': null,
 };

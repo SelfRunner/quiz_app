@@ -11,7 +11,11 @@ enum ShareResourceType {
   @JsonValue('note')
   note,
   @JsonValue('quiz')
-  quiz;
+  quiz,
+
+  /// Flashcard deck (Wave 2).
+  @JsonValue('deck')
+  deck;
 
   String get wireName => name;
 }

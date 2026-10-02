@@ -172,7 +172,8 @@ abstract interface class ShareRemoteDataSource {
   /// `title` column of a visible row, or null.
   Future<String?> fetchTitle(String table, String id);
 
-  /// Calls `copy_subject` / `copy_note` / `copy_quiz`; returns the new id.
+  /// Calls `copy_subject` / `copy_note` / `copy_quiz` / `copy_deck`;
+  /// returns the new id.
   Future<String> copyResource({
     required ShareResourceType type,
     required String resourceId,

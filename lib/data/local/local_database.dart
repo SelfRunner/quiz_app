@@ -23,6 +23,9 @@ class LocalDatabase {
     required Box<String> quizzesBox,
     required Box<String> attemptsBox,
     required Box<String> attachmentsBox,
+    required Box<String> decksBox,
+    required Box<String> cardReviewsBox,
+    required Box<String> mistakesBox,
     required Box<String> outboxBox,
     required Box<String> syncMetaBox,
     required this.images,
@@ -54,6 +57,21 @@ class LocalDatabase {
          box: attachmentsBox,
          fromJson: Attachment.fromJson,
        ),
+       decks = LocalTable<Deck>(
+         name: SyncTables.decks,
+         box: decksBox,
+         fromJson: Deck.fromJson,
+       ),
+       reviews = LocalTable<CardReview>(
+         name: SyncTables.cardReviews,
+         box: cardReviewsBox,
+         fromJson: CardReview.fromJson,
+       ),
+       mistakes = LocalTable<Mistake>(
+         name: SyncTables.mistakes,
+         box: mistakesBox,
+         fromJson: Mistake.fromJson,
+       ),
        outbox = Outbox(outboxBox, clock: clock, newId: newId),
        meta = SyncMetaStore(syncMetaBox);
 
@@ -69,6 +87,9 @@ class LocalDatabase {
     quizzesBox: HiveBoxes.box(HiveBoxes.quizzes),
     attemptsBox: HiveBoxes.box(HiveBoxes.quizAttempts),
     attachmentsBox: HiveBoxes.box(HiveBoxes.attachments),
+    decksBox: HiveBoxes.box(HiveBoxes.decks),
+    cardReviewsBox: HiveBoxes.box(HiveBoxes.cardReviews),
+    mistakesBox: HiveBoxes.box(HiveBoxes.mistakes),
     outboxBox: HiveBoxes.box(HiveBoxes.outbox),
     syncMetaBox: HiveBoxes.box(HiveBoxes.syncMeta),
     images:
@@ -88,6 +109,15 @@ class LocalDatabase {
   final LocalTable<Quiz> quizzes;
   final LocalTable<QuizAttempt> attempts;
   final LocalTable<Attachment> attachments;
+
+  /// Flashcard decks (own + shared), like [quizzes].
+  final LocalTable<Deck> decks;
+
+  /// The user's own spaced-repetition state per card (private).
+  final LocalTable<CardReview> reviews;
+
+  /// The user's own wrong-answer tracking per question (private).
+  final LocalTable<Mistake> mistakes;
   final Outbox outbox;
   final SyncMetaStore meta;
 
@@ -107,6 +137,9 @@ class LocalDatabase {
     quizzes,
     attempts,
     attachments,
+    decks,
+    reviews,
+    mistakes,
   ];
 
   /// Local blob cache for a Storage bucket (null for unknown buckets).
@@ -122,6 +155,9 @@ class LocalDatabase {
     SyncTables.quizzes => quizzes,
     SyncTables.quizAttempts => attempts,
     SyncTables.attachments => attachments,
+    SyncTables.decks => decks,
+    SyncTables.cardReviews => reviews,
+    SyncTables.mistakes => mistakes,
     _ => throw ArgumentError.value(name, 'name', 'Not a synced table'),
   };
 

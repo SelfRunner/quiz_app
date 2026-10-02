@@ -35,4 +35,5 @@ const _$ShareResourceTypeEnumMap = {
   ShareResourceType.subject: 'subject',
   ShareResourceType.note: 'note',
   ShareResourceType.quiz: 'quiz',
+  ShareResourceType.deck: 'deck',
 };

@@ -235,6 +235,8 @@ class SharedItemCard extends ConsumerWidget {
     ShareResourceType.subject => AppRoutes.subject(share.resourceId),
     ShareResourceType.note => AppRoutes.note(share.resourceId),
     ShareResourceType.quiz => AppRoutes.quiz(share.resourceId),
+    // No deck route yet (Wave 2 UI); open the shared list.
+    ShareResourceType.deck => AppRoutes.shared,
   };
 
   @override
@@ -342,6 +344,9 @@ class _DetailsLine extends ConsumerWidget {
       case ShareResourceType.quiz:
         final quiz = ref.watch(quizProvider(id)).value;
         if (quiz != null) parts.add(_count(quiz.questions.length, 'question'));
+      case ShareResourceType.deck:
+        final deck = ref.watch(deckProvider(id)).value;
+        if (deck != null) parts.add(_count(deck.cards.length, 'card'));
     }
     return Text(
       parts.join(' · '),
