@@ -43,13 +43,26 @@ QuizAttempt _attempt(String id, String quizId, double score, int minutesAgo) {
 }
 
 void main() {
-  testWidgets('QuizListSection lists subject-level quizzes with scores and '
-      'creates a new quiz', (tester) async {
+  testWidgets('QuizListSection lists all quizzes of the subject (note '
+      'quizzes labeled, after subject-level ones) and creates a new quiz', (
+    tester,
+  ) async {
     _tall(tester);
     final env = TestEnv();
     env.quizzes
       ..add(quiz('q1', [_q1, _q2], title: 'Subject quiz'))
-      ..add(quiz('q2', [_q1], title: 'Note quiz', noteId: 'n1'));
+      ..add(quiz('q2', [_q1], title: 'Note quiz', noteId: 'n1'))
+      ..add(quiz('q3', [_q1], title: 'Other subject', subjectId: 's2'));
+    env.notes.add(
+      Note(
+        id: 'n1',
+        subjectId: 's1',
+        ownerId: userId,
+        title: 'Lecture 1',
+        createdAt: fixedNow,
+        updatedAt: fixedNow,
+      ),
+    );
     await env.attempts.save(_attempt('a1', 'q1', 4, 10)); // 80%
     await env.attempts.save(_attempt('a2', 'q1', 3, 5)); // 60%, latest
     await tester.pumpWidget(
@@ -63,8 +76,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Subject quiz'), findsOneWidget);
-    expect(find.text('Note quiz'), findsNothing);
+    expect(find.text('Note quiz'), findsOneWidget);
+    expect(find.text('Other subject'), findsNothing);
     expect(find.text('2 questions · Best 80% · Last 60%'), findsOneWidget);
+    expect(
+      find.textContaining('From note: Lecture 1 · 1 question'),
+      findsOneWidget,
+    );
+    // Subject-level quizzes first.
+    expect(
+      tester.getTopLeft(find.text('Subject quiz')).dy,
+      lessThan(tester.getTopLeft(find.text('Note quiz')).dy),
+    );
+    await tester.tap(find.text('Note quiz'));
+    await tester.pumpAndSettle();
+    expect(find.text('Practice mistakes (1)'), findsNothing);
+    expect(find.byKey(const Key('exam-quiz')), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     expect(find.text('Generate with AI'), findsOneWidget);
 
     await tester.tap(find.text('New quiz'));

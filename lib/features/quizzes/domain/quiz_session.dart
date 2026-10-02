@@ -20,6 +20,29 @@ class PlayItem {
   ];
 }
 
+/// Play items for [questions], optionally shuffling the question order and
+/// the answer options (true/false keeps its natural order).
+List<PlayItem> buildPlayItems(
+  List<Question> questions, {
+  bool shuffleQuestions = false,
+  bool shuffleOptions = false,
+  Random? random,
+}) {
+  final rng = random ?? Random();
+  final ordered = [...questions];
+  if (shuffleQuestions) ordered.shuffle(rng);
+  return [
+    for (final q in ordered)
+      PlayItem(q, () {
+        final order = List<int>.generate(q.options.length, (i) => i);
+        if (shuffleOptions && q.type != QuestionType.trueFalse) {
+          order.shuffle(rng);
+        }
+        return order;
+      }()),
+  ];
+}
+
 /// Mutable state of one run through a quiz (UI calls `setState` after each
 /// mutation). Selections are stored as *original* option indices so the
 /// recorded [QuestionAnswer]s do not depend on shuffling.
@@ -31,11 +54,11 @@ class QuizSession {
     this.shuffleOptions = false,
     this.isPractice = false,
     Random? random,
-  }) : items = _buildItems(
+  }) : items = buildPlayItems(
          questions,
-         shuffleQuestions,
-         shuffleOptions,
-         random ?? Random(),
+         shuffleQuestions: shuffleQuestions,
+         shuffleOptions: shuffleOptions,
+         random: random,
        );
 
   final List<PlayItem> items;
@@ -51,27 +74,6 @@ class QuizSession {
   final Map<String, String> _texts = {};
   final Map<String, bool> _grades = {};
   final Set<String> _revealed = {};
-
-  static List<PlayItem> _buildItems(
-    List<Question> questions,
-    bool shuffleQuestions,
-    bool shuffleOptions,
-    Random random,
-  ) {
-    final ordered = [...questions];
-    if (shuffleQuestions) ordered.shuffle(random);
-    return [
-      for (final q in ordered)
-        PlayItem(q, () {
-          final order = List<int>.generate(q.options.length, (i) => i);
-          // True/False keeps its natural order.
-          if (shuffleOptions && q.type != QuestionType.trueFalse) {
-            order.shuffle(random);
-          }
-          return order;
-        }()),
-    ];
-  }
 
   int get length => items.length;
   PlayItem get current => items[index];
@@ -164,7 +166,18 @@ class QuizSession {
   /// Score as a fraction 0..1.
   double get fraction => items.isEmpty ? 0 : correctCount / items.length;
 
-  /// Attempt record for this session.
+  /// Graded answers only (`isCorrect != null`), e.g. for mistake tracking.
+  List<QuestionAnswer> gradedAnswers() => [
+    for (final a in answers())
+      if (a.isCorrect != null) a,
+  ];
+
+  /// Whole seconds between [startedAt] and [completedAt] (never negative).
+  int durationSecondsAt(DateTime completedAt) =>
+      max(0, completedAt.difference(startedAt).inSeconds);
+
+  /// Attempt record for this session (answers, score, completion and
+  /// `durationSeconds`).
   QuizAttempt toAttempt(QuizAttempt started, {required DateTime completedAt}) =>
       started.copyWith(
         answers: answers(),
@@ -172,5 +185,6 @@ class QuizSession {
         total: items.length,
         startedAt: startedAt,
         completedAt: completedAt,
+        durationSeconds: durationSecondsAt(completedAt),
       );
 }

@@ -46,6 +46,36 @@ String formatDuration(Duration d) {
   return '${s}s';
 }
 
+/// Exam time limit: "10 min", or a duration for odd values.
+String formatTimeLimit(int seconds) => seconds % 60 == 0
+    ? '${seconds ~/ 60} min'
+    : formatDuration(Duration(seconds: seconds));
+
+/// Countdown/stopwatch text: `m:ss`, or `h:mm:ss` from one hour.
+String formatClock(Duration d) {
+  final t = d.isNegative ? Duration.zero : d;
+  final h = t.inHours;
+  final m = t.inMinutes.remainder(60);
+  final s = t.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$s' : '$m:$s';
+}
+
+/// Time spent on a completed attempt: `durationSeconds`, else the span
+/// between start and completion (older rows).
+Duration attemptDuration(QuizAttempt a) {
+  final secs = a.durationSeconds;
+  if (secs != null) return Duration(seconds: secs);
+  final done = a.completedAt;
+  return done == null ? Duration.zero : done.difference(a.startedAt);
+}
+
+/// Short label of an attempt's mode (null for regular practice).
+String? attemptModeLabel(AttemptMode mode) => switch (mode) {
+  AttemptMode.practice => null,
+  AttemptMode.exam => 'Exam',
+  AttemptMode.mistakes => 'Mistakes',
+};
+
 String formatDateTime(DateTime utc) =>
     DateFormat.yMMMd().add_jm().format(utc.toLocal());
 

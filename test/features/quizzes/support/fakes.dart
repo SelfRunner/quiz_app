@@ -14,13 +14,17 @@ import 'package:quiz_app/core/providers.dart';
 import 'package:quiz_app/data/data_providers.dart';
 import 'package:quiz_app/data/models/models.dart';
 import 'package:quiz_app/data/repositories/attempt_repository.dart';
+import 'package:quiz_app/data/repositories/mistake_repository.dart';
 import 'package:quiz_app/data/repositories/note_repository.dart';
 import 'package:quiz_app/data/repositories/quiz_repository.dart';
+import 'package:quiz_app/data/repositories/study_activity_repository.dart';
 import 'package:quiz_app/data/repositories/subject_repository.dart';
 import 'package:quiz_app/features/ai_generate/presentation/ai_generate_screen.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_detail_screen.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_edit_screen.dart';
 import 'package:quiz_app/features/quizzes/presentation/quiz_play_screen.dart';
+import 'package:quiz_app/features/study/presentation/mistakes_screen.dart';
+import 'package:quiz_app/study/stats.dart';
 
 const userId = 'u1';
 final fixedNow = DateTime.utc(2026, 1, 1, 12);
@@ -162,7 +166,165 @@ class FakeAttemptRepository implements AttemptRepository {
   }
 
   @override
-  Future<void> delete(String id) async {}
+  Future<void> delete(String id) async {
+    deleted.add(id);
+    _t.rows.remove(id);
+    _t._changes.add(null);
+  }
+
+  final List<String> deleted = [];
+}
+
+/// In-memory [MistakeRepository] following the contract's lifecycle.
+class FakeMistakeRepository implements MistakeRepository {
+  FakeMistakeRepository(this.quizzes, {required this.clock});
+
+  final FakeQuizRepository quizzes;
+  final DateTime Function() clock;
+  final _t = _Table<Mistake>();
+
+  /// Every recorded answer, in order.
+  final List<({String quizId, String questionId, bool correct})> recorded = [];
+
+  Iterable<Mistake> get rows => _t.rows.values;
+
+  Mistake? find(String quizId, String questionId) =>
+      _t.rows[_key(quizId, questionId)];
+
+  static String _key(String quizId, String questionId) => '$quizId/$questionId';
+
+  Mistake add(Mistake m) {
+    _t.put(_key(m.quizId, m.questionId), m);
+    return m;
+  }
+
+  @override
+  Future<Mistake?> recordAnswer({
+    required String quizId,
+    required String questionId,
+    required bool correct,
+  }) async {
+    recorded.add((quizId: quizId, questionId: questionId, correct: correct));
+    final existing = find(quizId, questionId);
+    final now = clock();
+    if (!correct) {
+      final base =
+          existing ??
+          Mistake(
+            id: Mistake.idFor(
+              ownerId: userId,
+              quizId: quizId,
+              questionId: questionId,
+            ),
+            ownerId: userId,
+            quizId: quizId,
+            questionId: questionId,
+            createdAt: now,
+            updatedAt: now,
+          );
+      return add(
+        base.copyWith(
+          wrongCount: base.wrongCount + 1,
+          correctStreak: 0,
+          lastWrongAt: now,
+          resolvedAt: null,
+          updatedAt: now,
+        ),
+      );
+    }
+    if (existing == null || !existing.isOpen) return existing;
+    final streak = existing.correctStreak + 1;
+    return add(
+      existing.copyWith(
+        correctStreak: streak,
+        resolvedAt: streak >= Mistake.resolveAfterCorrect ? now : null,
+        updatedAt: now,
+      ),
+    );
+  }
+
+  @override
+  Future<void> recordAttempt(QuizAttempt attempt) async {
+    for (final a in attempt.answers) {
+      final correct = a.isCorrect;
+      if (correct == null) continue;
+      await recordAnswer(
+        quizId: attempt.quizId,
+        questionId: a.questionId,
+        correct: correct,
+      );
+    }
+  }
+
+  List<MistakeGroup> _groups() {
+    final byQuiz = <String, List<Mistake>>{};
+    for (final m in _t.rows.values.where((m) => m.isOpen)) {
+      (byQuiz[m.quizId] ??= []).add(m);
+    }
+    final groups = <MistakeGroup>[];
+    for (final MapEntry(key: quizId, value: list) in byQuiz.entries) {
+      final quiz = quizzes._t.rows[quizId];
+      if (quiz == null || quiz.isDeleted) continue;
+      final byQuestion = {for (final m in list) m.questionId: m};
+      final entries = [
+        for (final q in quiz.questions)
+          if (byQuestion[q.id] case final m?)
+            MistakeEntry(mistake: m, question: q),
+      ];
+      if (entries.isNotEmpty) {
+        groups.add(MistakeGroup(quiz: quiz, entries: entries));
+      }
+    }
+    groups.sort(
+      (a, b) => (b.lastWrongAt ?? DateTime(0)).compareTo(
+        a.lastWrongAt ?? DateTime(0),
+      ),
+    );
+    return groups;
+  }
+
+  @override
+  Stream<List<MistakeGroup>> watchOpen() => _t.watch(_groups);
+
+  @override
+  Stream<int> watchOpenCount() =>
+      watchOpen().map((g) => g.fold<int>(0, (n, g) => n + g.entries.length));
+
+  @override
+  Future<void> resolve({
+    required String quizId,
+    required String questionId,
+  }) async {
+    final m = find(quizId, questionId);
+    if (m == null || !m.isOpen) return;
+    add(m.copyWith(resolvedAt: clock(), updatedAt: clock()));
+  }
+}
+
+/// Snapshot of the fakes (subjects, quizzes, attempts, mistakes); emits
+/// again whenever a mistake changes.
+class FakeStudyActivityRepository implements StudyActivityRepository {
+  FakeStudyActivityRepository(
+    this.subjects,
+    this.quizzes,
+    this.attempts,
+    this.mistakes,
+  );
+
+  final FakeSubjectRepository subjects;
+  final FakeQuizRepository quizzes;
+  final FakeAttemptRepository attempts;
+  final FakeMistakeRepository mistakes;
+
+  @override
+  Stream<StudySnapshot> watchSnapshot() => mistakes._t.watch(
+    () => StudySnapshot(
+      subjects: subjects._t.rows.values.toList(),
+      quizzes: quizzes.all,
+      attempts: attempts._t.rows.values.toList(),
+      mistakes: mistakes.rows.toList(),
+    ),
+  );
 }
 
 class FakeNoteRepository implements NoteRepository {
@@ -371,6 +533,16 @@ class TestEnv {
   final attempts = FakeAttemptRepository();
   final notes = FakeNoteRepository();
   final subjects = FakeSubjectRepository();
+  late final mistakes = FakeMistakeRepository(quizzes, clock: () => now);
+  late final activity = FakeStudyActivityRepository(
+    subjects,
+    quizzes,
+    attempts,
+    mistakes,
+  );
+
+  /// The app clock (`clockProvider`); advance it in timer tests.
+  DateTime now = fixedNow;
   final ai = FakeAiService(
     selection: const AiSelection(
       providerId: LlmProviderId.openai,
@@ -418,8 +590,10 @@ class TestEnv {
     attemptRepositoryProvider.overrideWithValue(attempts),
     noteRepositoryProvider.overrideWithValue(notes),
     subjectRepositoryProvider.overrideWithValue(subjects),
+    mistakeRepositoryProvider.overrideWithValue(mistakes),
+    studyActivityRepositoryProvider.overrideWithValue(activity),
     aiServiceProvider.overrideWithValue(ai),
-    clockProvider.overrideWithValue(() => fixedNow),
+    clockProvider.overrideWithValue(() => now),
     idGeneratorProvider.overrideWithValue(nextId),
   ];
 
@@ -456,11 +630,14 @@ class TestEnv {
             ),
             GoRoute(
               path: 'play',
-              builder: (_, s) =>
-                  QuizPlayScreen(quizId: s.pathParameters['id']!),
+              builder: (_, s) => QuizPlayScreen(
+                quizId: s.pathParameters['id']!,
+                mode: s.uri.queryParameters['mode'],
+              ),
             ),
           ],
         ),
+        GoRoute(path: '/mistakes', builder: (_, _) => const MistakesScreen()),
         GoRoute(
           path: '/ai/generate',
           builder: (_, s) {

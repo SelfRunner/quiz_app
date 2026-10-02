@@ -14,6 +14,8 @@ import '../../../data/models/share.dart';
 import '../../../data/models/syncable.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../../sharing/widgets/shared_by_chip.dart';
+import '../domain/exam_session.dart';
+import '../widgets/exam_setup.dart';
 import '../widgets/quiz_format.dart';
 import '../widgets/score_trend.dart';
 import '../widgets/source_summary.dart';
@@ -312,28 +314,7 @@ class _InfoSection extends ConsumerWidget {
           ),
         ],
         Gaps.h24,
-        Wrap(
-          spacing: Insets.md,
-          runSpacing: Insets.sm,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            FilledButton.icon(
-              key: const Key('play-quiz'),
-              style: FilledButton.styleFrom(minimumSize: const Size(140, 44)),
-              onPressed: count == 0
-                  ? null
-                  : () => context.push(AppRoutes.quizPlay(quiz.id)),
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('Play'),
-            ),
-            if (count == 0 && owner)
-              OutlinedButton.icon(
-                onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                label: const Text('Edit questions'),
-              ),
-          ],
-        ),
+        _PlayActions(quiz: quiz, owner: owner),
         if (count == 0) ...[
           Gaps.h12,
           Text(
@@ -521,6 +502,71 @@ class _HistorySection extends StatelessWidget {
   }
 }
 
+/// Play, Exam (setup dialog) and "Practice mistakes (N)".
+class _PlayActions extends ConsumerWidget {
+  const _PlayActions({required this.quiz, required this.owner});
+
+  final Quiz quiz;
+  final bool owner;
+
+  Future<void> _startExam(BuildContext context, WidgetRef ref) async {
+    final config = await showExamSetupDialog(
+      context,
+      total: quiz.questions.length,
+    );
+    if (config == null || !context.mounted) return;
+    ref.read(pendingExamConfigProvider.notifier).put(quiz.id, config);
+    await context.push(AppRoutes.quizPlay(quiz.id, mode: 'exam'));
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = quiz.questions.length;
+    final groups = ref.watch(openMistakesProvider).value ?? const [];
+    final mistakes = groups
+        .where((g) => g.quiz.id == quiz.id)
+        .fold<int>(0, (n, g) => n + g.entries.length);
+    return Wrap(
+      spacing: Insets.sm,
+      runSpacing: Insets.sm,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        FilledButton.icon(
+          key: const Key('play-quiz'),
+          style: FilledButton.styleFrom(minimumSize: const Size(140, 44)),
+          onPressed: count == 0
+              ? null
+              : () => context.push(AppRoutes.quizPlay(quiz.id)),
+          icon: const Icon(Icons.play_arrow_rounded),
+          label: const Text('Play'),
+        ),
+        FilledButton.tonalIcon(
+          key: const Key('exam-quiz'),
+          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+          onPressed: count == 0 ? null : () => _startExam(context, ref),
+          icon: const Icon(Icons.timer_outlined, size: 18),
+          label: const Text('Exam'),
+        ),
+        if (mistakes > 0)
+          OutlinedButton.icon(
+            key: const Key('practice-mistakes'),
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () =>
+                context.push(AppRoutes.quizPlay(quiz.id, mode: 'mistakes')),
+            icon: const Icon(Icons.replay_circle_filled_outlined, size: 18),
+            label: Text('Practice mistakes ($mistakes)'),
+          ),
+        if (count == 0 && owner)
+          OutlinedButton.icon(
+            onPressed: () => context.push(AppRoutes.quizEdit(quiz.id)),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Edit questions'),
+          ),
+      ],
+    );
+  }
+}
+
 class _AttemptRow extends StatelessWidget {
   const _AttemptRow({required this.attempt});
 
@@ -529,9 +575,18 @@ class _AttemptRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final p = attemptPercent(attempt);
-    final duration = attempt.completedAt!.difference(attempt.startedAt);
     final color = scoreColor(context, p);
+    final mode = attemptModeLabel(attempt.mode);
+    final limit = attempt.timeLimitSeconds;
+    final details = [
+      '${attempt.score.round()} of ${attempt.total} correct',
+      limit == null
+          ? formatDuration(attemptDuration(attempt))
+          : '${formatDuration(attemptDuration(attempt))} of '
+                '${formatTimeLimit(limit)}',
+    ];
     return ListRowTile(
       dense: true,
       leading: SizedBox.square(
@@ -540,20 +595,56 @@ class _AttemptRow extends StatelessWidget {
           value: (p ?? 0) / 100,
           strokeWidth: 2.5,
           color: color,
-          backgroundColor: AppColors.of(context).skeleton,
+          backgroundColor: colors.skeleton,
         ),
       ),
-      title: Text(formatDateTime(attempt.completedAt!)),
-      subtitle: Text(
-        '${attempt.score.round()} of ${attempt.total} correct · '
-        '${formatDuration(duration)}',
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              formatDateTime(attempt.completedAt!),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (mode != null) ...[Gaps.w8, AttemptModeBadge(label: mode)],
+        ],
       ),
+      subtitle: Text(details.join(' · ')),
       trailing: Text(
         formatPercent(p),
         style: theme.textTheme.titleSmall?.copyWith(
           color: color,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
+      ),
+    );
+  }
+}
+
+/// Small neutral pill ("Exam", "Mistakes") next to an attempt.
+class AttemptModeBadge extends StatelessWidget {
+  const AttemptModeBadge({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Insets.sm - 2,
+        vertical: 1,
+      ),
+      decoration: BoxDecoration(
+        color: colors.hover,
+        borderRadius: Radii.xsAll,
+        border: Border.all(color: colors.hairline),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall
+            ?.copyWith(color: colors.mutedText),
       ),
     );
   }
