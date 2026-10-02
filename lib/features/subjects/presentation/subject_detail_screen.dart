@@ -7,6 +7,7 @@ import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../../decks/widgets/deck_list_section.dart';
 import '../../notes/presentation/widgets/note_tile.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
@@ -31,7 +32,7 @@ final sharedByNameProvider = Provider.autoDispose.family<String?, String>((
   return null;
 });
 
-/// A subject's notes, quizzes and files (tabs). Owners can edit, delete,
+/// A subject's notes, quizzes, flashcard decks and files (tabs). Owners can edit, delete,
 /// share and add content; shared subjects are read-only with a "copy to my
 /// account" action.
 class SubjectDetailScreen extends ConsumerWidget {
@@ -129,7 +130,7 @@ class _SubjectDetail extends ConsumerWidget {
     ];
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           titleSpacing: 0,
@@ -177,6 +178,19 @@ class _SubjectDetail extends ConsumerWidget {
                   ),
                 ),
               ),
+              SingleChildScrollView(
+                key: const PageStorageKey('subject-decks'),
+                padding: const EdgeInsets.only(
+                  top: Insets.sm,
+                  bottom: Insets.xxxl,
+                ),
+                child: ContentContainer(
+                  child: DeckListSection(
+                    subjectId: subject.id,
+                    readOnly: !isOwner,
+                  ),
+                ),
+              ),
               SubjectFilesTab(subject: subject, isOwner: isOwner),
             ],
           ),
@@ -187,7 +201,7 @@ class _SubjectDetail extends ConsumerWidget {
 }
 
 /// App-bar "Generate with AI" button: locked until AI is set up, then opens
-/// a menu (quiz / note) for [subjectId].
+/// a menu (quiz / flashcards / note) for [subjectId].
 class GenerateWithAiButton extends StatelessWidget {
   const GenerateWithAiButton({super.key, required this.subjectId});
 
@@ -204,6 +218,12 @@ class GenerateWithAiButton extends StatelessWidget {
           leadingIcon: const Icon(Icons.quiz_outlined, size: 18),
           onPressed: () => go(AiGenerateKind.quiz),
           child: const Text('Generate quiz'),
+        ),
+        MenuItemButton(
+          key: const Key('generate-deck'),
+          leadingIcon: const Icon(Icons.style_outlined, size: 18),
+          onPressed: () => go(AiGenerateKind.deck),
+          child: const Text('Generate flashcards'),
         ),
         MenuItemButton(
           key: const Key('generate-note'),
@@ -419,6 +439,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
     tabs: [
       Tab(text: 'Notes', height: 40),
       Tab(text: 'Quizzes', height: 40),
+      Tab(text: 'Decks', height: 40),
       Tab(text: 'Files', height: 40),
     ],
   );

@@ -235,8 +235,7 @@ class SharedItemCard extends ConsumerWidget {
     ShareResourceType.subject => AppRoutes.subject(share.resourceId),
     ShareResourceType.note => AppRoutes.note(share.resourceId),
     ShareResourceType.quiz => AppRoutes.quiz(share.resourceId),
-    // No deck route yet (Wave 2 UI); open the shared list.
-    ShareResourceType.deck => AppRoutes.shared,
+    ShareResourceType.deck => AppRoutes.deck(share.resourceId),
   };
 
   @override
