@@ -4,12 +4,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../ai/ai_capabilities.dart';
 import '../../../../ai/ai_providers.dart';
+import '../../../../ai/ai_readiness.dart';
+import '../../../../ai/ai_source.dart' show AiInputKind;
 import '../../../../ai/base_url_policy.dart';
 import '../../../../ai/llm_provider.dart';
 import '../../../../core/widgets/confirm_dialog.dart';
+import '../../../../core/widgets/design_system.dart';
 import '../../../../core/widgets/error_message.dart';
-import '../../../../data/data_providers.dart';
 
 /// Parses `Header: value` lines (blank lines ignored). Throws [FormatException]
 /// with a user-facing message on a malformed line.
@@ -37,8 +40,23 @@ String formatHeaderLines(Map<String, String> headers) =>
 
 enum _TestState { idle, running, ok, failed }
 
-/// AI provider configuration: active provider, API key (device-only), model,
-/// and base URL / headers for OpenAI-compatible endpoints.
+/// Bumped after the AI settings were wiped elsewhere on the Settings screen
+/// ("Danger zone"), so [AiSettingsSection] reloads its form.
+final aiSettingsResetProvider = NotifierProvider<AiSettingsReset, int>(
+  AiSettingsReset.new,
+);
+
+class AiSettingsReset extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
+}
+
+/// AI provider configuration: readiness, active provider, API key
+/// (device-only), model with its input capabilities, and base URL / headers
+/// (plus a manual image/PDF capability override) for OpenAI-compatible
+/// endpoints.
 class AiSettingsSection extends ConsumerStatefulWidget {
   const AiSettingsSection({super.key});
 
@@ -72,17 +90,29 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
   /// Guards against out-of-order async loads when switching providers fast.
   int _loadToken = 0;
 
+  /// Input kinds of the provider + model in the form.
+  AiCapabilities? _caps;
+
+  /// Manual capability override of the model in the form.
+  Set<AiInputKind> _override = const {};
+  Timer? _capsDebounce;
+  int _capsToken = 0;
+
   @override
   void initState() {
     super.initState();
     for (final c in [_apiKey, _model, _baseUrl, _headers]) {
       c.addListener(_markDirty);
     }
+    for (final c in [_model, _baseUrl]) {
+      c.addListener(_scheduleCapabilities);
+    }
     unawaited(_init());
   }
 
   @override
   void dispose() {
+    _capsDebounce?.cancel();
     _apiKey.dispose();
     _model.dispose();
     _baseUrl.dispose();
@@ -157,6 +187,80 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
       _loading = false;
       _dirty = false;
     });
+    await _refreshCapabilities();
+  }
+
+  String get _modelOrDefault {
+    final m = _model.text.trim();
+    return m.isEmpty ? _provider.defaultModel : m;
+  }
+
+  /// The override store, when the key store supports it.
+  AiCapabilityOverrideStore? get _overrideStore {
+    final Object store = ref.read(apiKeyStoreProvider);
+    return store is AiCapabilityOverrideStore ? store : null;
+  }
+
+  /// OpenAI-compatible endpoint whose capabilities cannot be detected (not
+  /// OpenRouter): the user may declare image / PDF support.
+  bool get _canOverride =>
+      _provider == LlmProviderId.openaiCompatible &&
+      _overrideStore != null &&
+      !AiCapabilityResolver.isOpenRouterUrl(
+        _effectiveBaseUrl ?? _provider.defaultBaseUrl,
+      );
+
+  void _scheduleCapabilities() {
+    if (_loading || _suppressDirty) return;
+    _capsDebounce?.cancel();
+    _capsDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => unawaited(_refreshCapabilities()),
+    );
+  }
+
+  Future<void> _refreshCapabilities() async {
+    _capsDebounce?.cancel();
+    final token = ++_capsToken;
+    final p = _provider;
+    final model = _modelOrDefault;
+    final baseUrl = _effectiveBaseUrl ?? p.defaultBaseUrl;
+    try {
+      final store = _overrideStore;
+      final override = store != null && p == LlmProviderId.openaiCompatible
+          ? await store.getInputOverride(p, model)
+          : const <AiInputKind>{};
+      final caps = await ref
+          .read(aiCapabilityResolverProvider)
+          .resolve(
+            provider: p,
+            model: model,
+            baseUrl: baseUrl,
+            manualOverride: override,
+          );
+      if (!mounted || token != _capsToken) return;
+      setState(() {
+        _caps = caps;
+        _override = override;
+      });
+    } catch (_) {
+      if (!mounted || token != _capsToken) return;
+      setState(() => _caps = null);
+    }
+  }
+
+  Future<void> _setOverride(AiInputKind kind, bool enabled) async {
+    final store = _overrideStore;
+    if (store == null) return;
+    final next = {..._override};
+    enabled ? next.add(kind) : next.remove(kind);
+    try {
+      await store.setInputOverride(_provider, _modelOrDefault, next);
+      ref.invalidate(aiReadinessProvider);
+      await _refreshCapabilities();
+    } catch (e) {
+      if (mounted) showErrorSnackBar(context, e);
+    }
   }
 
   Future<void> _selectProvider(LlmProviderId? provider) async {
@@ -174,6 +278,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     }
     try {
       await ref.read(apiKeyStoreProvider).setSelectedProvider(provider);
+      ref.invalidate(aiReadinessProvider);
     } catch (e) {
       if (mounted) showErrorSnackBar(context, e);
     }
@@ -217,6 +322,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
         await store.setExtraHeaders(p, parseHeaderLines(_headers.text));
       }
       await store.setSelectedProvider(p);
+      ref.invalidate(aiReadinessProvider);
       final configured = await store.configuredProviders();
       if (!mounted) return;
       setState(() {
@@ -225,6 +331,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
         _dirty = false;
       });
       showAppSnackBar(context, '${p.displayName} settings saved');
+      unawaited(_refreshCapabilities());
     } catch (e) {
       if (mounted) showErrorSnackBar(context, e, prefix: 'Could not save');
     } finally {
@@ -246,6 +353,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     try {
       final store = ref.read(apiKeyStoreProvider);
       await store.deleteApiKey(_provider);
+      ref.invalidate(aiReadinessProvider);
       final configured = await store.configuredProviders();
       if (!mounted) return;
       _suppressDirty = true;
@@ -257,29 +365,6 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
         _models = null;
       });
       showAppSnackBar(context, 'API key removed');
-    } catch (e) {
-      if (mounted) showErrorSnackBar(context, e);
-    }
-  }
-
-  Future<void> _clearAll() async {
-    final ok = await showConfirmDialog(
-      context,
-      title: 'Remove all saved keys?',
-      message:
-          'All API keys and AI settings saved for your account on this '
-          'device are deleted. Keys of other accounts are not affected.',
-      confirmLabel: 'Remove all',
-      destructive: true,
-    );
-    if (!ok || !mounted) return;
-    final userId = ref.read(currentUserIdProvider);
-    if (userId == null) return;
-    try {
-      await ref.read(apiKeyStoreProvider).clearForUser(userId);
-      if (!mounted) return;
-      showAppSnackBar(context, 'All saved keys removed');
-      await _init();
     } catch (e) {
       if (mounted) showErrorSnackBar(context, e);
     }
@@ -347,15 +432,18 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(aiSettingsResetProvider, (_, _) => unawaited(_init()));
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final p = _provider;
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _KeyPrivacyNote(isWeb: kIsWeb),
-          const SizedBox(height: 16),
+          const AiReadinessBanner(),
+          if (kIsWeb) ...[Gaps.h12, const _WebKeyWarning()],
+          Gaps.h16,
           KeyedSubtree(
             key: const Key('ai-provider'),
             child: DropdownButtonFormField<LlmProviderId>(
@@ -365,7 +453,6 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Provider used for generation',
-                prefixIcon: Icon(Icons.auto_awesome_outlined),
               ),
               items: [
                 for (final id in LlmProviderId.values)
@@ -378,7 +465,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                           Icon(
                             Icons.key,
                             size: 16,
-                            color: theme.colorScheme.primary,
+                            color: colors.mutedText,
                             semanticLabel: 'Key saved',
                           ),
                       ],
@@ -388,12 +475,9 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
               onChanged: _loading || _saving ? null : _selectProvider,
             ),
           ),
-          const SizedBox(height: 16),
+          Gaps.h16,
           if (_loading)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(child: CircularProgressIndicator()),
-            )
+            const LoadingSkeleton(rows: 3, leading: false, subtitle: false)
           else ...[
             TextFormField(
               key: const Key('ai-api-key'),
@@ -409,7 +493,6 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                     : p.requiresBaseUrl
                     ? 'Optional for local endpoints (e.g. Ollama)'
                     : 'Required to generate with ${p.displayName}',
-                prefixIcon: const Icon(Icons.key_outlined),
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -417,7 +500,10 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                       key: const Key('ai-api-key-visibility'),
                       tooltip: _obscureKey ? 'Show key' : 'Hide key',
                       icon: Icon(
-                        _obscureKey ? Icons.visibility : Icons.visibility_off,
+                        _obscureKey
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        size: 18,
                       ),
                       onPressed: () =>
                           setState(() => _obscureKey = !_obscureKey),
@@ -426,7 +512,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                       IconButton(
                         key: const Key('ai-api-key-clear'),
                         tooltip: 'Remove saved key',
-                        icon: const Icon(Icons.delete_outline),
+                        icon: const Icon(Icons.delete_outline, size: 18),
                         onPressed: _clearKey,
                       ),
                   ],
@@ -434,7 +520,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
               ),
             ),
             if (p.requiresBaseUrl) ...[
-              const SizedBox(height: 16),
+              Gaps.h16,
               TextFormField(
                 key: const Key('ai-base-url'),
                 controller: _baseUrl,
@@ -449,12 +535,11 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                       'e.g. http://localhost:11434/v1 for Ollama',
                   helperMaxLines: 3,
                   errorMaxLines: 3,
-                  prefixIcon: const Icon(Icons.link),
                 ),
                 autovalidateMode: AutovalidateMode.onUserInteraction,
                 validator: (v) => baseUrlProblem(v ?? ''),
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               TextFormField(
                 key: const Key('ai-headers'),
                 controller: _headers,
@@ -478,7 +563,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 },
               ),
             ],
-            const SizedBox(height: 16),
+            Gaps.h16,
             _ModelField(
               controller: _model,
               focusNode: _modelFocus,
@@ -488,17 +573,44 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
               error: _modelsError,
               onLoad: _loadModels,
             ),
-            const SizedBox(height: 16),
+            Gaps.h12,
+            _CapabilitySummary(caps: _caps, model: _modelOrDefault),
+            if (_canOverride) ...[
+              Gaps.h8,
+              _OverrideToggle(
+                key: const Key('ai-override-image'),
+                label: 'Model supports images',
+                value: _override.contains(AiInputKind.image),
+                onChanged: (v) => _setOverride(AiInputKind.image, v),
+              ),
+              _OverrideToggle(
+                key: const Key('ai-override-pdf'),
+                label: 'Model supports PDFs',
+                value: _override.contains(AiInputKind.pdf),
+                onChanged: (v) => _setOverride(AiInputKind.pdf, v),
+              ),
+              Text(
+                'Turn these on only if your endpoint accepts image or PDF '
+                'input for this model; otherwise requests with files fail.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colors.mutedText,
+                ),
+              ),
+            ],
+            Gaps.h16,
             if (_testMessage != null) ...[
-              _TestResult(
-                ok: _testState == _TestState.ok,
+              InfoBanner(
+                key: const Key('ai-test-result'),
+                kind: _testState == _TestState.ok
+                    ? InfoBannerKind.success
+                    : InfoBannerKind.error,
                 message: _testMessage!,
               ),
-              const SizedBox(height: 12),
+              Gaps.h12,
             ],
             Wrap(
-              spacing: 12,
-              runSpacing: 8,
+              spacing: Insets.sm,
+              runSpacing: Insets.sm,
               alignment: WrapAlignment.end,
               children: [
                 OutlinedButton.icon(
@@ -509,7 +621,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.network_check),
+                      : const Icon(Icons.network_check, size: 18),
                   label: const Text('Test connection'),
                 ),
                 FilledButton.icon(
@@ -520,29 +632,206 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                           dimension: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.save_outlined),
+                      : const Icon(Icons.check, size: 18),
                   label: Text(_dirty ? 'Save' : 'Saved'),
                 ),
               ],
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                key: const Key('ai-clear-all'),
-                onPressed: _saving ? null : _clearAll,
-                style: TextButton.styleFrom(
-                  foregroundColor: theme.colorScheme.error,
-                ),
-                icon: const Icon(Icons.delete_sweep_outlined),
-                label: const Text('Remove all saved keys'),
-              ),
             ),
           ],
         ],
       ),
     );
   }
+}
+
+/// Whether AI is usable: "ready" with provider + model, or what is missing.
+class AiReadinessBanner extends ConsumerWidget {
+  const AiReadinessBanner({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final readiness = ref.watch(aiReadinessProvider).value;
+    if (readiness == null) {
+      return const LoadingSkeleton(
+        key: Key('ai-readiness'),
+        rows: 1,
+        leading: false,
+      );
+    }
+    if (readiness.isConfigured) {
+      return InfoBanner(
+        key: const Key('ai-readiness'),
+        kind: InfoBannerKind.success,
+        title: 'AI is ready',
+        message:
+            'Using ${readiness.providerId?.displayName ?? 'AI'} · '
+            '${readiness.model ?? ''}',
+      );
+    }
+    return InfoBanner(
+      key: const Key('ai-readiness'),
+      kind: InfoBannerKind.warning,
+      title: switch (readiness.issue) {
+        AiReadinessIssue.invalidBaseUrl => 'Base URL not allowed',
+        AiReadinessIssue.storageError => 'Settings could not be read',
+        AiReadinessIssue.missingModel => 'Choose a model',
+        _ => 'AI is not set up',
+      },
+      message:
+          readiness.reason ??
+          'Add an API key and choose a model to use AI features.',
+    );
+  }
+}
+
+/// One input kind of the selected model: check when supported, dimmed when
+/// not.
+class CapabilityChip extends StatelessWidget {
+  const CapabilityChip({
+    super.key,
+    required this.label,
+    required this.supported,
+    this.tooltip,
+  });
+
+  final String label;
+  final bool supported;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final fg = supported ? theme.colorScheme.onSurface : colors.faintText;
+    final chip = Semantics(
+      label: '$label: ${supported ? 'supported' : 'not supported'}',
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Insets.sm,
+          vertical: Insets.xxs + 1,
+        ),
+        decoration: BoxDecoration(
+          color: supported ? colors.hover : null,
+          borderRadius: Radii.smAll,
+          border: Border.all(color: colors.hairline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              supported ? Icons.check : Icons.remove,
+              size: 14,
+              color: supported ? colors.success : colors.faintText,
+            ),
+            Gaps.w4,
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: fg,
+                decoration: supported ? null : TextDecoration.lineThrough,
+                decorationColor: colors.faintText,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return tooltip == null ? chip : Tooltip(message: tooltip, child: chip);
+  }
+}
+
+class _CapabilitySummary extends StatelessWidget {
+  const _CapabilitySummary({required this.caps, required this.model});
+
+  final AiCapabilities? caps;
+  final String model;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final c = caps;
+    return Column(
+      key: const Key('ai-capabilities'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'What $model can read',
+          style: theme.textTheme.labelMedium?.copyWith(color: colors.mutedText),
+        ),
+        Gaps.h8,
+        if (c == null)
+          const LoadingSkeleton(rows: 1, leading: false, subtitle: false)
+        else
+          Wrap(
+            spacing: Insets.xs + 2,
+            runSpacing: Insets.xs + 2,
+            children: [
+              const CapabilityChip(
+                key: Key('ai-cap-text'),
+                label: 'Text',
+                supported: true,
+                tooltip: 'Pasted text, notes, .txt/.md/.docx files',
+              ),
+              CapabilityChip(
+                key: const Key('ai-cap-pdf'),
+                label: 'PDF',
+                supported: c.pdf,
+              ),
+              CapabilityChip(
+                key: const Key('ai-cap-image'),
+                label: 'Images',
+                supported: c.image,
+              ),
+              CapabilityChip(
+                key: const Key('ai-cap-audio'),
+                label: 'Audio',
+                supported: c.audio,
+              ),
+              CapabilityChip(
+                key: const Key('ai-cap-video'),
+                label: 'Video',
+                supported: c.video,
+              ),
+              CapabilityChip(
+                key: const Key('ai-cap-youtube'),
+                label: 'YouTube',
+                supported: c.youtube,
+                tooltip: c.youtubeNative
+                    ? 'The video itself is sent to the model'
+                    : c.youtube
+                    ? 'Uses the video transcript'
+                    : 'Not available here (YouTube blocks transcripts on '
+                          'the web)',
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _OverrideToggle extends StatelessWidget {
+  const _OverrideToggle({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => SwitchListTile(
+    dense: true,
+    contentPadding: EdgeInsets.zero,
+    title: Text(label),
+    value: value,
+    onChanged: onChanged,
+  );
 }
 
 class _ModelField extends StatelessWidget {
@@ -594,7 +883,6 @@ class _ModelField extends StatelessWidget {
                         ? 'Leave empty for $defaultModel, or load the list'
                         : '${options.length} models available — type to '
                               'filter',
-                    prefixIcon: const Icon(Icons.memory),
                     suffixIcon: loading
                         ? const Padding(
                             padding: EdgeInsets.all(12),
@@ -606,7 +894,7 @@ class _ModelField extends StatelessWidget {
                         : IconButton(
                             key: const Key('ai-load-models'),
                             tooltip: 'Load available models',
-                            icon: const Icon(Icons.refresh),
+                            icon: const Icon(Icons.refresh, size: 18),
                             onPressed: onLoad,
                           ),
                   ),
@@ -645,7 +933,8 @@ class _ModelField extends StatelessWidget {
             padding: const EdgeInsets.only(top: 6, left: 12),
             child: Text(
               error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: AppColors.of(context).danger),
             ),
           ),
       ],
@@ -653,76 +942,15 @@ class _ModelField extends StatelessWidget {
   }
 }
 
-class _TestResult extends StatelessWidget {
-  const _TestResult({required this.ok, required this.message});
-
-  final bool ok;
-  final String message;
+class _WebKeyWarning extends StatelessWidget {
+  const _WebKeyWarning();
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final bg = ok ? scheme.primaryContainer : scheme.errorContainer;
-    final fg = ok ? scheme.onPrimaryContainer : scheme.onErrorContainer;
-    return Container(
-      key: const Key('ai-test-result'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            ok ? Icons.check_circle_outline : Icons.error_outline,
-            color: fg,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(message, style: TextStyle(color: fg)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _KeyPrivacyNote extends StatelessWidget {
-  const _KeyPrivacyNote({required this.isWeb});
-
-  final bool isWeb;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.shield_outlined,
-            color: theme.colorScheme.onSecondaryContainer,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Bring your own API key. Keys are stored only on this device '
-              '(never uploaded to your account) and are sent directly to the '
-              'provider you choose.'
-              '${isWeb ? '\n\nOn the web, keys are kept in this browser\'s '
-                        'storage, which is less protected than the system '
-                        'keychain on desktop and mobile. Remove the key when '
-                        'using a shared computer.' : ''}',
-              style: TextStyle(color: theme.colorScheme.onSecondaryContainer),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const InfoBanner(
+    icon: Icons.shield_outlined,
+    message:
+        "On the web, keys are kept in this browser's storage, which is less "
+        'protected than the system keychain on desktop and mobile. Remove the '
+        'key when using a shared computer.',
+  );
 }

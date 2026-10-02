@@ -7,10 +7,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/errors/app_exception.dart';
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../core/widgets/error_message.dart';
 import '../../../core/widgets/note_markdown.dart';
-import '../../../core/widgets/responsive.dart';
-import '../../../core/widgets/state_views.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../application/markdown_editing.dart';
@@ -302,7 +301,7 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: const Text('Edit note')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const ContentContainer(child: LoadingSkeleton(leading: false)),
       );
     }
     final note = _note;
@@ -333,17 +332,23 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
         ? _EditorMode.write
         : mode;
 
+    final colors = AppColors.of(context);
+    final hairline = Divider(height: 1, color: colors.hairline);
+    final split = effectiveMode == _EditorMode.split;
+    // Single-pane modes keep a readable line length; split uses the width.
+    Widget pane(Widget child) => split ? child : ContentContainer(child: child);
+
+    final toolbar = MarkdownToolbar(
+      controller: _content,
+      focusNode: _contentFocus,
+      onInsertLink: _insertLink,
+      onInsertImage: _insertImage,
+      imageBusy: _imageBusy,
+    );
+
     final editor = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        MarkdownToolbar(
-          controller: _content,
-          focusNode: _contentFocus,
-          onInsertLink: _insertLink,
-          onInsertImage: _insertImage,
-          imageBusy: _imageBusy,
-        ),
-        const Divider(height: 1),
         Expanded(
           child: TextField(
             key: const Key('note-content'),
@@ -354,11 +359,21 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
             minLines: null,
             keyboardType: TextInputType.multiline,
             textAlignVertical: TextAlignVertical.top,
-            style: const TextStyle(fontFamily: 'monospace', height: 1.45),
-            decoration: const InputDecoration(
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              fontFamily: 'monospace',
+              fontSize: 14.5,
+              height: 1.6,
+            ),
+            decoration: InputDecoration(
               hintText: 'Write in Markdown… e.g. ## Heading, **bold**, - list',
               border: InputBorder.none,
-              contentPadding: EdgeInsets.all(16),
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              filled: false,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: split ? Insets.lg : 0,
+                vertical: Insets.lg,
+              ),
             ),
           ),
         ),
@@ -375,20 +390,25 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
             )
           : SingleChildScrollView(
               key: const Key('note-preview'),
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.symmetric(
+                horizontal: split ? Insets.xl : 0,
+                vertical: Insets.lg,
+              ),
               child: NoteMarkdown(data: _content.text),
             ),
     );
 
     final body = switch (effectiveMode) {
-      _EditorMode.write => editor,
-      _EditorMode.preview => preview,
+      _EditorMode.write => pane(editor),
+      _EditorMode.preview => pane(preview),
       _EditorMode.split => Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(child: editor),
-          const VerticalDivider(width: 1),
-          Expanded(child: preview),
+          VerticalDivider(width: 1, color: colors.hairline),
+          Expanded(
+            child: ColoredBox(color: colors.sidebar, child: preview),
+          ),
         ],
       ),
     };
@@ -408,6 +428,14 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
               _wrap('**', 'bold'),
           const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
               _wrap('_', 'italic'),
+          const SingleActivator(LogicalKeyboardKey.keyB, meta: true): () =>
+              _wrap('**', 'bold'),
+          const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
+              _wrap('_', 'italic'),
+          const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+              unawaited(_insertLink()),
+          const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+              unawaited(_insertLink()),
         },
         child: Scaffold(
           appBar: AppBar(
@@ -459,31 +487,43 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: TextField(
-                  key: const Key('note-title'),
-                  controller: _title,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                  textCapitalization: TextCapitalization.sentences,
-                  textInputAction: TextInputAction.next,
-                  onSubmitted: (_) => _contentFocus.requestFocus(),
-                  onTap: () {
-                    // Select the placeholder title for quick replacement.
-                    if (_title.text == kUntitledNoteTitle) {
-                      _title.selection = TextSelection(
-                        baseOffset: 0,
-                        extentOffset: _title.text.length,
-                      );
-                    }
-                  },
-                  decoration: const InputDecoration(
-                    hintText: 'Title',
-                    border: InputBorder.none,
-                  ),
+              ContentContainer(
+                maxWidth: split ? double.infinity : ContentWidth.readable,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      key: const Key('note-title'),
+                      controller: _title,
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textCapitalization: TextCapitalization.sentences,
+                      textInputAction: TextInputAction.next,
+                      onSubmitted: (_) => _contentFocus.requestFocus(),
+                      onTap: () {
+                        // Select the placeholder title for quick replacement.
+                        if (_title.text == kUntitledNoteTitle) {
+                          _title.selection = TextSelection(
+                            baseOffset: 0,
+                            extentOffset: _title.text.length,
+                          );
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        hintText: 'Title',
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        contentPadding: EdgeInsets.symmetric(
+                          vertical: Insets.md,
+                        ),
+                      ),
+                    ),
+                    if (effectiveMode != _EditorMode.preview) toolbar,
+                  ],
                 ),
               ),
-              const Divider(height: 1),
+              hairline,
               Expanded(child: body),
             ],
           ),
@@ -501,27 +541,16 @@ class _SaveIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final (IconData icon, String label, Color color) = switch (state) {
       _SaveState.saved => (
         Icons.cloud_done_outlined,
         'Saved',
-        theme.colorScheme.onSurfaceVariant,
+        colors.faintText,
       ),
-      _SaveState.dirty => (
-        Icons.edit_outlined,
-        'Unsaved',
-        theme.colorScheme.onSurfaceVariant,
-      ),
-      _SaveState.saving => (
-        Icons.sync,
-        'Saving…',
-        theme.colorScheme.onSurfaceVariant,
-      ),
-      _SaveState.failed => (
-        Icons.error_outline,
-        'Not saved',
-        theme.colorScheme.error,
-      ),
+      _SaveState.dirty => (Icons.edit_outlined, 'Unsaved', colors.mutedText),
+      _SaveState.saving => (Icons.sync, 'Saving…', colors.mutedText),
+      _SaveState.failed => (Icons.error_outline, 'Not saved', colors.danger),
     };
     final showLabel = Breakpoints.isMedium(context);
     return Tooltip(

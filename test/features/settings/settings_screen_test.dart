@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:quiz_app/ai/ai_service.dart';
 import 'package:quiz_app/ai/llm_provider.dart';
 import 'package:quiz_app/core/errors/app_exception.dart';
 import 'package:quiz_app/core/theme/app_theme.dart';
@@ -151,6 +152,96 @@ void main() {
       ),
     );
     expect(keyField.controller!.text, isEmpty);
+  });
+
+  bool supported(WidgetTester tester, String kind) =>
+      tester.widget<CapabilityChip>(find.byKey(Key('ai-cap-$kind'))).supported;
+
+  testWidgets('readiness banner and capability chips for the model', (
+    tester,
+  ) async {
+    final deps = TestDeps();
+    await _pump(tester, deps);
+    final banner = find.byKey(const Key('ai-readiness'));
+    expect(
+      find.descendant(of: banner, matching: find.text('AI is not set up')),
+      findsOneWidget,
+    );
+    // Gemini default model: everything.
+    for (final k in ['text', 'pdf', 'image', 'audio', 'video', 'youtube']) {
+      expect(supported(tester, k), isTrue, reason: k);
+    }
+
+    await tester.enterText(find.byKey(const Key('ai-api-key')), 'g-key');
+    await tester.tap(find.byKey(const Key('ai-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: banner, matching: find.text('AI is ready')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Using ${LlmProviderId.gemini.displayName}'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('OpenAI vision vs text-only models', (tester) async {
+    final deps = TestDeps();
+    deps.keys
+      ..selected = LlmProviderId.openai
+      ..keys[LlmProviderId.openai] = 'sk'
+      ..models[LlmProviderId.openai] = 'gpt-4.1-mini';
+    await _pump(tester, deps);
+    expect(supported(tester, 'pdf'), isTrue);
+    expect(supported(tester, 'image'), isTrue);
+    expect(supported(tester, 'audio'), isFalse);
+    expect(supported(tester, 'video'), isFalse);
+
+    await tester.enterText(find.byKey(const Key('ai-model')), 'gpt-3.5-turbo');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(supported(tester, 'pdf'), isFalse);
+    expect(supported(tester, 'image'), isFalse);
+    expect(supported(tester, 'text'), isTrue);
+  });
+
+  testWidgets('OpenRouter capabilities come from model metadata', (
+    tester,
+  ) async {
+    final deps = TestDeps();
+    deps.aiHttp.models['vendor/vision'] = ['text', 'image'];
+    deps.keys
+      ..selected = LlmProviderId.openaiCompatible
+      ..keys[LlmProviderId.openaiCompatible] = 'or-key'
+      ..models[LlmProviderId.openaiCompatible] = 'vendor/vision';
+    await _pump(tester, deps);
+    expect(supported(tester, 'image'), isTrue);
+    expect(supported(tester, 'pdf'), isFalse);
+    // OpenRouter is detected: no manual override.
+    expect(find.byKey(const Key('ai-override-image')), findsNothing);
+  });
+
+  testWidgets('local endpoint: image / PDF override toggles', (tester) async {
+    final deps = TestDeps();
+    const p = LlmProviderId.openaiCompatible;
+    deps.keys
+      ..selected = p
+      ..baseUrls[p] = 'http://localhost:11434/v1'
+      ..models[p] = 'llava';
+    await _pump(tester, deps);
+    expect(supported(tester, 'image'), isFalse);
+
+    await tester.ensureVisible(find.byKey(const Key('ai-override-image')));
+    await tester.tap(find.byKey(const Key('ai-override-image')));
+    await tester.pumpAndSettle();
+    expect(deps.keys.overrides['openai_compatible/llava'], {AiInputKind.image});
+    expect(supported(tester, 'image'), isTrue);
+    expect(supported(tester, 'pdf'), isFalse);
+
+    await tester.tap(find.byKey(const Key('ai-override-image')));
+    await tester.pumpAndSettle();
+    expect(deps.keys.overrides, isEmpty);
+    expect(supported(tester, 'image'), isFalse);
   });
 
   testWidgets('theme mode and manual sync', (tester) async {

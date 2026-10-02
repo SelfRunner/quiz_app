@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../application/auth_validators.dart';
 import 'widgets/auth_scaffold.dart';
@@ -84,22 +85,16 @@ class _ForgotPasswordDialogState extends ConsumerState<ForgotPasswordDialog> {
                 "Enter your account's email and we'll send you a "
                 'reset link.',
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               TextFormField(
                 controller: _email,
                 autofocus: true,
                 keyboardType: TextInputType.emailAddress,
                 validator: AuthValidators.email,
                 onFieldSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email_outlined),
-                ),
+                decoration: const InputDecoration(labelText: 'Email'),
               ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                FormMessage(message: _error!),
-              ],
+              if (_error != null) ...[Gaps.h12, FormMessage(message: _error!)],
             ],
           ),
         ),

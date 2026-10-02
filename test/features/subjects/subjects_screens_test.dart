@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:quiz_app/core/widgets/locked_feature.dart';
 import 'package:quiz_app/data/models/models.dart';
 import 'package:quiz_app/features/subjects/presentation/subject_detail_screen.dart';
 import 'package:quiz_app/features/subjects/presentation/subjects_screen.dart';
@@ -23,6 +24,11 @@ Widget _app(TestDeps deps, {String initial = '/'}) {
         path: '/notes/:id/edit',
         builder: (_, state) => Text('edit ${state.pathParameters['id']}'),
       ),
+      GoRoute(
+        path: '/ai/generate',
+        builder: (_, state) => Text('generate ${state.uri}'),
+      ),
+      GoRoute(path: '/settings', builder: (_, _) => const Text('settings')),
     ],
   );
   return ProviderScope(
@@ -140,6 +146,91 @@ void main() {
     expect(find.text('Shared by Grace'), findsOneWidget);
     expect(find.byKey(const Key('new-note-fab')), findsNothing);
     expect(find.byTooltip('Share'), findsNothing);
+  });
+
+  testWidgets('list view and name sort', (tester) async {
+    tester.view.physicalSize = const Size(1100, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final deps = TestDeps();
+    deps.subjects.seed(id: 's1', title: 'Zoology');
+    deps.subjects.seed(id: 's2', title: 'algebra');
+    await deps.subjects.update(
+      deps.subjects
+          .seed(id: 's3', title: 'Music')
+          .copyWith(updatedAt: kNow.add(const Duration(days: 1))),
+    );
+    await tester.pumpWidget(_app(deps));
+    await tester.pumpAndSettle();
+
+    List<String> titles() => tester
+        .widgetList<SubjectCard>(find.byType(SubjectCard))
+        .map((c) => c.subject.title)
+        .toList();
+    // Default: most recently updated first.
+    expect(titles().first, 'Music');
+
+    await tester.tap(find.byKey(const Key('subjects-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.widgetWithText(CheckedPopupMenuItem<SubjectsSort>, 'Name'),
+    );
+    await tester.pumpAndSettle();
+    expect(titles(), ['algebra', 'Music', 'Zoology']);
+
+    await tester.tap(find.byTooltip('List'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SubjectCard), findsNothing);
+    expect(find.byType(SubjectRow), findsNWidgets(3));
+  });
+
+  testWidgets('"Generate with AI" is locked until AI is set up', (
+    tester,
+  ) async {
+    final deps = TestDeps();
+    deps.subjects.seed(id: 's1', title: 'Biology');
+    await tester.pumpWidget(_app(deps, initial: '/subjects/s1'));
+    await tester.pumpAndSettle();
+
+    for (final key in const ['generate-with-ai', 'notes-generate-ai']) {
+      final gate = find.ancestor(
+        of: find.byKey(Key(key)),
+        matching: find.byType(LockedFeature),
+      );
+      expect(
+        find.descendant(of: gate, matching: find.byKey(LockedFeature.badgeKey)),
+        findsOneWidget,
+        reason: key,
+      );
+    }
+    await tester.tap(
+      find.ancestor(
+        of: find.byKey(const Key('generate-with-ai')),
+        matching: find.byType(LockedFeature),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Set up AI'), findsOneWidget);
+    expect(find.text('Generate quiz'), findsNothing);
+  });
+
+  testWidgets('"Generate with AI" opens the menu when AI is ready', (
+    tester,
+  ) async {
+    final deps = TestDeps()..configureAi();
+    deps.subjects.seed(id: 's1', title: 'Biology');
+    await tester.pumpWidget(_app(deps, initial: '/subjects/s1'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(LockedFeature.badgeKey), findsNothing);
+    await tester.tap(find.byKey(const Key('generate-with-ai')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Generate note'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('generate /ai/generate?kind=note&subjectId=s1'),
+      findsOneWidget,
+    );
   });
 
   for (final size in const [Size(360, 740), Size(1280, 800)]) {

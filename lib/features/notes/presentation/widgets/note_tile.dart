@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/router/routes.dart';
+import '../../../../core/widgets/design_system.dart';
 import '../../../../core/widgets/sync_status_indicator.dart';
 import '../../../../data/models/models.dart';
 import '../../application/markdown_editing.dart';
@@ -17,64 +18,53 @@ class NoteTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
     final preview = markdownPreviewText(note.contentMd);
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
+    final edited = 'Edited ${formatRelativeTime(note.updatedAt)}';
+    final wide = Breakpoints.isMedium(context);
+    return ListRowTile(
+      leading: const Icon(Icons.description_outlined),
+      title: Text(note.title.isEmpty ? 'Untitled note' : note.title),
+      subtitle: Text(
+        [if (preview.isNotEmpty) preview, if (!wide) edited].join(' · '),
+        maxLines: 1,
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
-        leading: const Icon(Icons.description_outlined),
-        title: Text(
-          note.title.isEmpty ? 'Untitled note' : note.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Text(
-          [
-            if (preview.isNotEmpty) preview,
-            'Updated ${formatRelativeTime(note.updatedAt)}',
-          ].join('\n'),
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-        isThreeLine: preview.isNotEmpty,
-        onTap: () => context.push(AppRoutes.note(note.id)),
-        trailing: canEdit
-            ? PopupMenuButton<String>(
-                tooltip: 'More',
-                onSelected: (v) {
-                  if (v == 'edit') {
-                    context.push(AppRoutes.noteEdit(note.id));
-                  } else if (v == 'delete') {
-                    NoteActions.delete(context, ref, note).ignore();
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: ListTile(
-                      leading: Icon(Icons.edit_outlined),
-                      title: Text('Edit'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: ListTile(
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('Delete'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
-              )
-            : null,
-      ),
+      trailing: wide ? Text(edited) : null,
+      onTap: () => context.push(AppRoutes.note(note.id)),
+      actions: [
+        if (canEdit)
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            icon: Icon(
+              Icons.more_horiz,
+              color: AppColors.of(context).mutedText,
+            ),
+            onSelected: (v) {
+              if (v == 'edit') {
+                context.push(AppRoutes.noteEdit(note.id));
+              } else if (v == 'delete') {
+                NoteActions.delete(context, ref, note).ignore();
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'edit',
+                child: ListTile(
+                  leading: Icon(Icons.edit_outlined),
+                  title: Text('Edit'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: ListTile(
+                  leading: Icon(Icons.delete_outline),
+                  title: Text('Delete'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
+      ],
     );
   }
 }
