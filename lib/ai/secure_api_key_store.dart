@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/errors/app_exception.dart';
 import 'api_key_store.dart';
+import 'base_url_policy.dart';
 import 'llm_provider.dart';
 
 /// Minimal key-value backend so [SecureApiKeyStore] can be tested without
@@ -12,6 +13,9 @@ abstract interface class SecureKeyValueStore {
   Future<String?> read(String key);
   Future<void> write(String key, String value);
   Future<void> delete(String key);
+
+  /// All stored keys (values are not returned).
+  Future<Set<String>> keys();
 }
 
 /// [SecureKeyValueStore] backed by `flutter_secure_storage`.
@@ -39,6 +43,10 @@ class FlutterSecureKeyValueStore implements SecureKeyValueStore {
 
   @override
   Future<void> delete(String key) => _guard(() => _storage.delete(key: key));
+
+  @override
+  Future<Set<String>> keys() =>
+      _guard(() async => (await _storage.readAll()).keys.toSet());
 
   Future<T> _guard<T>(Future<T> Function() body) async {
     try {
@@ -69,82 +77,151 @@ class InMemoryKeyValueStore implements SecureKeyValueStore {
 
   @override
   Future<void> delete(String key) async => values.remove(key);
+
+  @override
+  Future<Set<String>> keys() async => values.keys.toSet();
 }
 
 /// [ApiKeyStore] on top of a [SecureKeyValueStore] (flutter_secure_storage
 /// in the app). Everything here stays on the device; nothing is synced.
+///
+/// Entries are namespaced by [userId] (`ai.u.<userId>.<entry>`). With a null
+/// [userId] (signed out) reads return nothing and writes throw
+/// [AppAuthException].
+///
+/// Migration: entries written before namespacing (`ai.<entry>`) are moved to
+/// the first signed-in user that uses a store (existing values of that user
+/// win), then deleted, so later users never see them.
 class SecureApiKeyStore implements ApiKeyStore {
-  SecureApiKeyStore([SecureKeyValueStore? backend])
+  SecureApiKeyStore({required this.userId, SecureKeyValueStore? backend})
     : _kv = backend ?? FlutterSecureKeyValueStore();
+
+  /// Supabase user id the store is bound to; null when signed out.
+  final String? userId;
 
   final SecureKeyValueStore _kv;
 
   static const _prefix = 'ai.';
-  static String _apiKeyKey(LlmProviderId p) =>
-      '${_prefix}api_key.${p.wireName}';
-  static String _baseUrlKey(LlmProviderId p) =>
-      '${_prefix}base_url.${p.wireName}';
-  static String _modelKey(LlmProviderId p) => '${_prefix}model.${p.wireName}';
-  static String _headersKey(LlmProviderId p) =>
-      '${_prefix}headers.${p.wireName}';
-  static const _selectedProviderKey = '${_prefix}selected_provider';
+
+  static String _apiKeyEntry(LlmProviderId p) => 'api_key.${p.wireName}';
+  static String _baseUrlEntry(LlmProviderId p) => 'base_url.${p.wireName}';
+  static String _modelEntry(LlmProviderId p) => 'model.${p.wireName}';
+  static String _headersEntry(LlmProviderId p) => 'headers.${p.wireName}';
+  static const _selectedProviderEntry = 'selected_provider';
+
+  /// Every entry name a user namespace can hold.
+  static List<String> get _allEntries => [
+    for (final p in LlmProviderId.values) ...[
+      _apiKeyEntry(p),
+      _baseUrlEntry(p),
+      _modelEntry(p),
+      _headersEntry(p),
+    ],
+    _selectedProviderEntry,
+  ];
+
+  static String _userKey(String userId, String entry) =>
+      '${_prefix}u.$userId.$entry';
+  static String _legacyKey(String entry) => '$_prefix$entry';
+
+  Future<void>? _migration;
+
+  /// Moves legacy un-namespaced entries to the current user (once).
+  Future<void> _ready() async {
+    final uid = userId;
+    if (uid == null) return;
+    final m = _migration ??= _migrateLegacy(uid);
+    try {
+      await m;
+    } catch (_) {
+      // Retry on the next call instead of caching the failure.
+      if (identical(_migration, m)) _migration = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _migrateLegacy(String uid) async {
+    for (final entry in _allEntries) {
+      final legacy = _legacyKey(entry);
+      final value = await _kv.read(legacy);
+      if (value == null) continue;
+      final target = _userKey(uid, entry);
+      if (await _kv.read(target) == null) await _kv.write(target, value);
+      await _kv.delete(legacy);
+    }
+  }
+
+  Future<String?> _read(String entry) async {
+    final uid = userId;
+    if (uid == null) return null;
+    await _ready();
+    return _kv.read(_userKey(uid, entry));
+  }
+
+  Future<void> _write(String entry, String value) async {
+    final uid = userId;
+    if (uid == null) {
+      throw const AppAuthException('Sign in to save AI settings.');
+    }
+    await _ready();
+    await _kv.write(_userKey(uid, entry), value);
+  }
+
+  Future<void> _delete(String entry) async {
+    final uid = userId;
+    if (uid == null) return;
+    await _ready();
+    await _kv.delete(_userKey(uid, entry));
+  }
 
   @override
   Future<String?> getApiKey(LlmProviderId provider) async =>
-      _nonEmpty(await _kv.read(_apiKeyKey(provider)));
+      _nonEmpty(await _read(_apiKeyEntry(provider)));
 
   @override
   Future<void> setApiKey(LlmProviderId provider, String apiKey) async {
     final key = apiKey.trim();
     if (key.isEmpty) return deleteApiKey(provider);
-    await _kv.write(_apiKeyKey(provider), key);
+    await _write(_apiKeyEntry(provider), key);
   }
 
   @override
   Future<void> deleteApiKey(LlmProviderId provider) =>
-      _kv.delete(_apiKeyKey(provider));
+      _delete(_apiKeyEntry(provider));
 
   @override
   Future<String?> getBaseUrl(LlmProviderId provider) async =>
-      _nonEmpty(await _kv.read(_baseUrlKey(provider)));
+      _nonEmpty(await _read(_baseUrlEntry(provider)));
 
   @override
   Future<void> setBaseUrl(LlmProviderId provider, String? baseUrl) async {
     final url = baseUrl?.trim() ?? '';
-    if (url.isEmpty) return _kv.delete(_baseUrlKey(provider));
-    final uri = Uri.tryParse(url);
-    if (uri == null ||
-        !(uri.scheme == 'https' || uri.scheme == 'http') ||
-        uri.host.isEmpty) {
-      throw const ValidationException(
-        'Enter a full base URL, e.g. https://openrouter.ai/api/v1',
-      );
-    }
-    await _kv.write(_baseUrlKey(provider), url.replaceAll(RegExp(r'/+$'), ''));
+    if (url.isEmpty) return _delete(_baseUrlEntry(provider));
+    await _write(_baseUrlEntry(provider), normalizeBaseUrl(url));
   }
 
   @override
   Future<LlmProviderId?> getSelectedProvider() async =>
-      LlmProviderId.fromWireName(await _kv.read(_selectedProviderKey));
+      LlmProviderId.fromWireName(await _read(_selectedProviderEntry));
 
   @override
   Future<void> setSelectedProvider(LlmProviderId provider) =>
-      _kv.write(_selectedProviderKey, provider.wireName);
+      _write(_selectedProviderEntry, provider.wireName);
 
   @override
   Future<String?> getSelectedModel(LlmProviderId provider) async =>
-      _nonEmpty(await _kv.read(_modelKey(provider)));
+      _nonEmpty(await _read(_modelEntry(provider)));
 
   @override
   Future<void> setSelectedModel(LlmProviderId provider, String model) async {
     final m = model.trim();
-    if (m.isEmpty) return _kv.delete(_modelKey(provider));
-    await _kv.write(_modelKey(provider), m);
+    if (m.isEmpty) return _delete(_modelEntry(provider));
+    await _write(_modelEntry(provider), m);
   }
 
   @override
   Future<Map<String, String>> getExtraHeaders(LlmProviderId provider) async {
-    final raw = await _kv.read(_headersKey(provider));
+    final raw = await _read(_headersEntry(provider));
     if (raw == null || raw.isEmpty) return const {};
     try {
       final decoded = jsonDecode(raw);
@@ -167,8 +244,8 @@ class SecureApiKeyStore implements ApiKeyStore {
       for (final e in headers.entries)
         if (e.key.trim().isNotEmpty) e.key.trim(): e.value.trim(),
     };
-    if (clean.isEmpty) return _kv.delete(_headersKey(provider));
-    await _kv.write(_headersKey(provider), jsonEncode(clean));
+    if (clean.isEmpty) return _delete(_headersEntry(provider));
+    await _write(_headersEntry(provider), jsonEncode(clean));
   }
 
   @override
@@ -178,6 +255,23 @@ class SecureApiKeyStore implements ApiKeyStore {
       if (await getApiKey(p) != null) result.add(p);
     }
     return result;
+  }
+
+  @override
+  Future<void> clearForUser(String userId) async {
+    // Run the pending migration first so legacy entries that would move to
+    // this user are removed too.
+    if (userId == this.userId) await _ready();
+    for (final entry in _allEntries) {
+      await _kv.delete(_userKey(userId, entry));
+    }
+  }
+
+  @override
+  Future<void> clearAll() async {
+    for (final key in await _kv.keys()) {
+      if (key.startsWith(_prefix)) await _kv.delete(key);
+    }
   }
 
   static String? _nonEmpty(String? v) =>

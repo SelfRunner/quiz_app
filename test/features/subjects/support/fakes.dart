@@ -357,6 +357,25 @@ class FakeApiKeyStore implements ApiKeyStore {
 
   @override
   Future<Set<LlmProviderId>> configuredProviders() async => keys.keys.toSet();
+
+  final List<String> clearedUsers = [];
+
+  void _clear() {
+    keys.clear();
+    models.clear();
+    baseUrls.clear();
+    headers.clear();
+    selected = null;
+  }
+
+  @override
+  Future<void> clearForUser(String userId) async {
+    clearedUsers.add(userId);
+    _clear();
+  }
+
+  @override
+  Future<void> clearAll() async => _clear();
 }
 
 class FakeAiService implements AiService {

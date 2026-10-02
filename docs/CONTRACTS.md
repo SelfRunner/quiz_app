@@ -475,12 +475,28 @@ the input field client-side.
 (`setApiKey`, `deleteApiKey`, `setSelectedProvider`, `setSelectedModel`,
 `setBaseUrl` (throws `ValidationException` on a malformed URL),
 `setExtraHeaders` e.g. `{'HTTP-Referer': .., 'X-Title': ..}` for OpenRouter,
-`configuredProviders`). Model picker: `aiService.listModels(p, apiKey:
+`configuredProviders`, `clearForUser(id)`, `clearAll()`). Model picker: `aiService.listModels(p, apiKey:
 unsavedKey?, baseUrl: ..)`, falling back to free text +
 `p.defaultModel` on error. "Test" button: `aiService.testConnection(p,
 apiKey: unsavedKey?)` completes or throws. Base URL / headers fields only for
 `p.requiresBaseUrl`. On web, warn that keys are stored in browser storage
 (weaker than OS keychains).
+
+**Per-user scoping.** The store is rebuilt from `currentUserIdProvider` and
+keys every entry as `ai.u.<userId>.<entry>`, so another account on the same
+device never sees (or pays with) the previous user's key. Signed out: reads
+return nothing, writes throw `AppAuthException`. Sign-out deletes nothing
+(the same user gets their keys back); Settings has "Remove all saved keys"
+(`clearForUser`). Pre-namespacing entries (`ai.<entry>`) are moved once to
+the first signed-in user that touches the store, then deleted. Tests override
+`aiSecureStorageProvider` with `InMemoryKeyValueStore`.
+
+**Base URL policy** (`lib/ai/base_url_policy.dart`): `https://` only, except
+`http://` to loopback/private hosts (`localhost`, `*.localhost`, `*.local`,
+`127/8`, `::1`, `10/8`, `172.16/12`, `192.168/16`) for Ollama/LM Studio.
+Enforced by `setBaseUrl`, by `DefaultAiService` before any request (including
+unsaved Settings input and previously stored values), and by the Settings
+field validator (`baseUrlProblem`).
 
 **Errors** (all `AppException`, show `message`):
 

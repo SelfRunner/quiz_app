@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../ai/ai_providers.dart';
+import '../../../../ai/base_url_policy.dart';
 import '../../../../ai/llm_provider.dart';
 import '../../../../core/widgets/confirm_dialog.dart';
 import '../../../../core/widgets/error_message.dart';
+import '../../../../data/data_providers.dart';
 
 /// Parses `Header: value` lines (blank lines ignored). Throws [FormatException]
 /// with a user-facing message on a malformed line.
@@ -260,6 +262,29 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     }
   }
 
+  Future<void> _clearAll() async {
+    final ok = await showConfirmDialog(
+      context,
+      title: 'Remove all saved keys?',
+      message:
+          'All API keys and AI settings saved for your account on this '
+          'device are deleted. Keys of other accounts are not affected.',
+      confirmLabel: 'Remove all',
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    final userId = ref.read(currentUserIdProvider);
+    if (userId == null) return;
+    try {
+      await ref.read(apiKeyStoreProvider).clearForUser(userId);
+      if (!mounted) return;
+      showAppSnackBar(context, 'All saved keys removed');
+      await _init();
+    } catch (e) {
+      if (mounted) showErrorSnackBar(context, e);
+    }
+  }
+
   Future<void> _loadModels() async {
     setState(() {
       _loadingModels = true;
@@ -420,20 +445,14 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                   hintText: p.defaultBaseUrl,
                   helperText:
                       'Leave empty for ${p.defaultBaseUrl} (OpenRouter). '
+                      'https:// required; http:// only for local servers, '
                       'e.g. http://localhost:11434/v1 for Ollama',
+                  helperMaxLines: 3,
+                  errorMaxLines: 3,
                   prefixIcon: const Icon(Icons.link),
                 ),
-                validator: (v) {
-                  final s = v?.trim() ?? '';
-                  if (s.isEmpty) return null;
-                  final uri = Uri.tryParse(s);
-                  if (uri == null ||
-                      !(uri.scheme == 'http' || uri.scheme == 'https') ||
-                      uri.host.isEmpty) {
-                    return 'Enter a full http(s) URL';
-                  }
-                  return null;
-                },
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                validator: (v) => baseUrlProblem(v ?? ''),
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -505,6 +524,19 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                   label: Text(_dirty ? 'Save' : 'Saved'),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: const Key('ai-clear-all'),
+                onPressed: _saving ? null : _clearAll,
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                ),
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: const Text('Remove all saved keys'),
+              ),
             ),
           ],
         ],

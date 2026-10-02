@@ -62,7 +62,7 @@ void main() {
   late FakeTranscriptService transcripts;
 
   setUp(() {
-    keys = SecureApiKeyStore(InMemoryKeyValueStore());
+    keys = SecureApiKeyStore(userId: 'u1', backend: InMemoryKeyValueStore());
     transcripts = FakeTranscriptService();
   });
 
@@ -371,6 +371,30 @@ void main() {
         expect(r.headers['X-Title'], 'Quiz');
       },
     );
+
+    test('never sends a key to an http:// remote base URL', () async {
+      final rc = RecordingClient([
+        (_) => jsonResponse({'data': <Object>[]}),
+      ]);
+      await expectLater(
+        service(rc).testConnection(
+          LlmProviderId.openaiCompatible,
+          apiKey: 'sk-or',
+          baseUrl: 'http://api.example.com/v1',
+        ),
+        throwsA(isA<ValidationException>()),
+      );
+      expect(rc.requests, isEmpty);
+
+      await service(rc).listModels(
+        LlmProviderId.openaiCompatible,
+        baseUrl: 'http://localhost:11434/v1',
+      );
+      expect(
+        rc.requests.single.url.toString(),
+        'http://localhost:11434/v1/models',
+      );
+    });
 
     test('testConnection surfaces invalid keys', () async {
       final rc = RecordingClient([
