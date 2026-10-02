@@ -19,6 +19,22 @@ enum LlmProviderId {
 
   bool get requiresBaseUrl => this == LlmProviderId.openaiCompatible;
 
+  /// Model used when the user has not picked one. Prefer stable aliases so
+  /// the default keeps working as providers ship new snapshots.
+  String get defaultModel => switch (this) {
+    LlmProviderId.gemini => 'gemini-flash-latest',
+    LlmProviderId.openai => 'gpt-5.4-mini',
+    LlmProviderId.anthropic => 'claude-sonnet-5-5',
+    LlmProviderId.openaiCompatible => 'openrouter/auto',
+  };
+
+  /// Base URL used when none is stored (only meaningful for
+  /// [LlmProviderId.openaiCompatible]; the others have fixed endpoints).
+  String? get defaultBaseUrl => switch (this) {
+    LlmProviderId.openaiCompatible => 'https://openrouter.ai/api/v1',
+    _ => null,
+  };
+
   static LlmProviderId? fromWireName(String? value) {
     for (final id in values) {
       if (id.wireName == value) return id;
@@ -34,6 +50,7 @@ class LlmConfig {
     required this.apiKey,
     required this.model,
     this.baseUrl,
+    this.extraHeaders = const {},
   });
 
   final LlmProviderId providerId;
@@ -43,6 +60,14 @@ class LlmConfig {
   /// Required for [LlmProviderId.openaiCompatible], optional override
   /// otherwise.
   final String? baseUrl;
+
+  /// Extra HTTP headers sent with every request (OpenAI-compatible only),
+  /// e.g. OpenRouter's `HTTP-Referer` / `X-Title`.
+  final Map<String, String> extraHeaders;
+
+  @override
+  String toString() =>
+      'LlmConfig(${providerId.wireName}, model: $model, baseUrl: $baseUrl)';
 }
 
 /// A configured LLM backend producing structured JSON.
