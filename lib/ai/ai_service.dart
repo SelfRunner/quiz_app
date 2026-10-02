@@ -2,7 +2,10 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../data/models/drafts.dart';
 import '../data/models/question.dart';
+import 'ai_source.dart';
 import 'llm_provider.dart';
+
+export 'ai_source.dart';
 
 part 'ai_service.freezed.dart';
 
@@ -11,8 +14,15 @@ enum Difficulty { easy, medium, hard }
 @freezed
 abstract class QuizGenerationRequest with _$QuizGenerationRequest {
   const factory QuizGenerationRequest({
-    /// Pasted source material. At least one of [contextText]/[youtubeUrl].
+    /// Source material: text, notes, files, YouTube links. At least one
+    /// non-empty source (here or in [contextText]/[youtubeUrl]) is required.
+    @Default(<AiSource>[]) List<AiSource> sources,
+
+    /// Legacy shorthand for `TextSource(text: contextText)` (listed first).
     String? contextText,
+
+    /// Legacy shorthand for `YoutubeSource(youtubeUrl)` (listed after
+    /// [contextText]).
     String? youtubeUrl,
     @Default(10) int questionCount,
     @Default({
@@ -40,6 +50,8 @@ abstract class QuizGenerationRequest with _$QuizGenerationRequest {
 @freezed
 abstract class NoteGenerationRequest with _$NoteGenerationRequest {
   const factory NoteGenerationRequest({
+    /// See [QuizGenerationRequest.sources].
+    @Default(<AiSource>[]) List<AiSource> sources,
     String? contextText,
     String? youtubeUrl,
     String? language,
@@ -52,6 +64,39 @@ abstract class NoteGenerationRequest with _$NoteGenerationRequest {
     LlmProviderId? providerId,
     String? model,
   }) = _NoteGenerationRequest;
+}
+
+/// A generic generation from sources into any JSON schema (e.g. future
+/// flashcard decks). Run with `DefaultAiService.generateStructured`.
+class StructuredGenerationRequest {
+  const StructuredGenerationRequest({
+    required this.sources,
+    required this.task,
+    required this.systemPrompt,
+    required this.schema,
+    required this.schemaName,
+    this.language,
+    this.topic,
+    this.extraInstructions,
+    this.providerId,
+    this.model,
+  });
+
+  final List<AiSource> sources;
+
+  /// What to produce, e.g. "Create 20 flashcards (front/back) ...". Becomes
+  /// the first line(s) of the user prompt.
+  final String task;
+  final String systemPrompt;
+
+  /// JSON Schema of the output (same dialect as `quizDraftJsonSchema`).
+  final Map<String, Object?> schema;
+  final String schemaName;
+  final String? language;
+  final String? topic;
+  final String? extraInstructions;
+  final LlmProviderId? providerId;
+  final String? model;
 }
 
 /// The provider/model a generation will use (or used). Fill

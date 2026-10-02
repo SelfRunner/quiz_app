@@ -3,6 +3,8 @@ import 'dart:convert';
 import '../core/errors/app_exception.dart';
 import '../data/models/drafts.dart';
 import '../data/models/question.dart';
+import 'ai_capabilities.dart';
+import 'ai_readiness.dart';
 import 'ai_service.dart';
 import 'api_key_store.dart';
 import 'base_url_policy.dart';
@@ -11,6 +13,7 @@ import 'llm_provider.dart';
 import 'prompts.dart';
 import 'providers/http_support.dart';
 import 'providers/openai_compatible_provider.dart';
+import 'text_extractor.dart';
 import 'transcript_service.dart';
 import 'youtube_url.dart';
 
@@ -21,6 +24,8 @@ class DefaultAiService implements AiService {
     required ApiKeyStore keyStore,
     required LlmProviderFactory providerFactory,
     required TranscriptService transcriptService,
+    this.capabilities,
+    this.isWeb,
     this.maxContextChars = 100000,
     this.maxQuestionCount = 50,
   }) : _keys = keyStore,
@@ -31,7 +36,14 @@ class DefaultAiService implements AiService {
   final LlmProviderFactory _factory;
   final TranscriptService _transcripts;
 
-  /// Pasted context longer than this is cut (with a note) before prompting.
+  /// Resolves model capabilities (OpenRouter metadata); null = static table.
+  final AiCapabilityResolver? capabilities;
+
+  /// Platform override for the static capability table (null = `kIsWeb`).
+  final bool? isWeb;
+
+  /// Total characters of user-provided text (pasted text, notes, text
+  /// files) sent to the model; longer sources are cut evenly, with a note.
   final int maxContextChars;
   final int maxQuestionCount;
 
@@ -48,8 +60,11 @@ class DefaultAiService implements AiService {
         ? QuestionType.values.toSet()
         : request.questionTypes;
     final prepared = await _prepare(
-      contextText: request.contextText,
-      youtubeUrl: request.youtubeUrl,
+      sources: _collect(
+        request.sources,
+        request.contextText,
+        request.youtubeUrl,
+      ),
       providerId: request.providerId,
       model: request.model,
     );
@@ -63,7 +78,7 @@ class DefaultAiService implements AiService {
       user: userPrompt,
       schema: quizDraftJsonSchema,
       schemaName: Prompts.quizSchemaName,
-      youtubeUrl: prepared.nativeVideoUrl,
+      attachments: prepared.attachments,
       what: 'quiz',
       validate: (json) => DraftValidator.validateQuiz(
         json,
@@ -78,8 +93,11 @@ class DefaultAiService implements AiService {
   @override
   Future<NoteDraft> generateNote(NoteGenerationRequest request) async {
     final prepared = await _prepare(
-      contextText: request.contextText,
-      youtubeUrl: request.youtubeUrl,
+      sources: _collect(
+        request.sources,
+        request.contextText,
+        request.youtubeUrl,
+      ),
       providerId: request.providerId,
       model: request.model,
     );
@@ -89,9 +107,43 @@ class DefaultAiService implements AiService {
       user: Prompts.noteUser(request, prepared.source),
       schema: noteDraftJsonSchema,
       schemaName: Prompts.noteSchemaName,
-      youtubeUrl: prepared.nativeVideoUrl,
+      attachments: prepared.attachments,
       what: 'note',
       validate: DraftValidator.validateNote,
+    );
+  }
+
+  // ---------------------------------------------------------- structured
+
+  /// Generic generation from sources into `request.schema` (e.g. flashcard
+  /// decks), with the same source handling, capability checks and single
+  /// repair retry as quizzes/notes. [validate] returns the parsed value or
+  /// errors that are sent back to the model once.
+  Future<T> generateStructured<T>(
+    StructuredGenerationRequest request, {
+    required DraftValidation<T> Function(Map<String, dynamic> json) validate,
+    String what = 'result',
+  }) async {
+    final prepared = await _prepare(
+      sources: _collect(request.sources, null, null),
+      providerId: request.providerId,
+      model: request.model,
+    );
+    return _generateValidated(
+      provider: prepared.provider,
+      system: request.systemPrompt,
+      user: Prompts.structuredUser(
+        task: request.task,
+        source: prepared.source,
+        topic: request.topic,
+        language: request.language,
+        extraInstructions: request.extraInstructions,
+      ),
+      schema: request.schema,
+      schemaName: request.schemaName,
+      attachments: prepared.attachments,
+      what: what,
+      validate: validate,
     );
   }
 
@@ -106,7 +158,8 @@ class DefaultAiService implements AiService {
     if (provider == null) {
       final configured = await _keys.configuredProviders();
       for (final p in LlmProviderId.values) {
-        if (configured.contains(p)) {
+        if (configured.contains(p) ||
+            isKeylessEndpoint(p, await _keys.getBaseUrl(p))) {
           provider = p;
           break;
         }
@@ -192,25 +245,55 @@ class DefaultAiService implements AiService {
 
   // ------------------------------------------------------------ internals
 
+  /// Legacy [contextText]/[youtubeUrl] first, then [sources]; blank text
+  /// sources dropped.
+  static List<AiSource> _collect(
+    List<AiSource> sources,
+    String? contextText,
+    String? youtubeUrl,
+  ) {
+    final text = _blankToNull(contextText);
+    final url = _blankToNull(youtubeUrl);
+    return [
+      if (text != null) TextSource(text: text),
+      if (url != null) YoutubeSource(url),
+      for (final s in sources)
+        if (switch (s) {
+          TextSource(:final text) => text.trim().isNotEmpty,
+          NoteSource(:final markdown) => markdown.trim().isNotEmpty,
+          FileSource() => true,
+          YoutubeSource(:final url) => url.trim().isNotEmpty,
+        })
+          s,
+    ];
+  }
+
   Future<_Prepared> _prepare({
-    required String? contextText,
-    required String? youtubeUrl,
+    required List<AiSource> sources,
     required LlmProviderId? providerId,
     required String? model,
   }) async {
-    final text = _blankToNull(contextText);
-    final rawUrl = _blankToNull(youtubeUrl);
-    if (text == null && rawUrl == null) {
+    if (sources.isEmpty) {
       throw const ValidationException(
-        'Add some text or a YouTube link to generate from.',
+        'Add some text, a note, a file or a YouTube link to generate from.',
       );
     }
-    String? url;
-    if (rawUrl != null) {
-      url = YoutubeUrl.normalize(rawUrl);
-      if (url == null) {
-        throw const ValidationException(
-          "That doesn't look like a YouTube video link.",
+    // Validate cheap things before touching settings or the network.
+    final youtube = <YoutubeSource, String>{};
+    for (final s in sources) {
+      if (s is YoutubeSource) {
+        final url = YoutubeUrl.normalize(s.url.trim());
+        if (url == null) {
+          throw const ValidationException(
+            "That doesn't look like a YouTube video link.",
+          );
+        }
+        youtube[s] = url;
+      } else if (s is FileSource && s.kind == null) {
+        throw AiException(
+          '"${s.name}" is not a supported file type. Use PDF, images, text '
+          'files (.txt, .md, .docx) or, with Gemini, audio and video.',
+          kind: AiErrorKind.unsupported,
         );
       }
     }
@@ -221,50 +304,227 @@ class DefaultAiService implements AiService {
     );
     final id = selection.providerId;
     final key = await _keys.getApiKey(id);
-    if (key == null) {
+    final storedBase = await _keys.getBaseUrl(id);
+    if (key == null && !isKeylessEndpoint(id, storedBase)) {
       throw AiException(
         'No API key saved for ${id.displayName}. Add one in Settings.',
         kind: AiErrorKind.missingApiKey,
       );
     }
+    final baseUrl = _checkedBaseUrl(storedBase ?? id.defaultBaseUrl);
     final provider = _factory.create(
       LlmConfig(
         providerId: id,
-        apiKey: key,
+        apiKey: key ?? '',
         model: selection.model,
-        baseUrl: _checkedBaseUrl(
-          (await _keys.getBaseUrl(id)) ?? id.defaultBaseUrl,
-        ),
+        baseUrl: baseUrl,
         extraHeaders: id == LlmProviderId.openaiCompatible
             ? await _keys.getExtraHeaders(id)
             : const {},
       ),
     );
 
-    VideoTranscript? transcript;
-    String? nativeVideoUrl;
-    if (url != null) {
-      if (id.supportsYoutubeUrl) {
-        nativeVideoUrl = url;
-      } else {
-        transcript = await _transcripts.fetchTranscript(url);
+    final needsCaps = sources.any(
+      (s) =>
+          s is YoutubeSource || (s is FileSource && s.kind != AiInputKind.text),
+    );
+    final caps = needsCaps
+        ? await _capabilitiesFor(selection, baseUrl)
+        : AiCapabilities.textOnly;
+
+    final entries = <PromptSourceEntry>[];
+    final attachments = <LlmAttachment>[];
+    for (final s in sources) {
+      switch (s) {
+        case TextSource(:final label, :final text):
+          entries.add(
+            PromptSourceEntry(
+              kind: PromptSourceKind.pastedText,
+              label: label,
+              text: text.trim(),
+            ),
+          );
+        case NoteSource(:final title, :final markdown):
+          entries.add(
+            PromptSourceEntry(
+              kind: PromptSourceKind.note,
+              label: title.trim().isEmpty ? 'Untitled note' : title.trim(),
+              text: markdown.trim(),
+            ),
+          );
+        case FileSource():
+          final kind = s.kind!;
+          if (kind == AiInputKind.text) {
+            final text =
+                TextExtractor.extract(s.name, s.mimeType, s.bytes) ?? '';
+            if (text.trim().isEmpty) {
+              throw ValidationException('"${s.name}" contains no text.');
+            }
+            entries.add(
+              PromptSourceEntry(
+                kind: PromptSourceKind.textFile,
+                label: s.name,
+                text: text.trim(),
+              ),
+            );
+            continue;
+          }
+          if (!caps.supports(kind)) {
+            throw AiException(
+              _unsupportedMessage(selection, kind, s.name),
+              kind: AiErrorKind.unsupported,
+            );
+          }
+          final n = attachments.length + 1;
+          attachments.add(
+            LlmFileAttachment(
+              label: 'Attachment $n: ${s.name}',
+              filename: s.name,
+              mimeType: s.effectiveMimeType,
+              bytes: s.bytes,
+              kind: kind,
+            ),
+          );
+          entries.add(
+            PromptSourceEntry(
+              kind: switch (kind) {
+                AiInputKind.pdf => PromptSourceKind.pdf,
+                AiInputKind.image => PromptSourceKind.image,
+                AiInputKind.audio => PromptSourceKind.audio,
+                _ => PromptSourceKind.video,
+              },
+              label: s.name,
+              attachmentNumber: n,
+            ),
+          );
+        case YoutubeSource():
+          final url = youtube[s]!;
+          if (caps.youtubeNative) {
+            final n = attachments.length + 1;
+            attachments.add(
+              LlmYoutubeAttachment(
+                label: 'Attachment $n: YouTube video',
+                url: url,
+              ),
+            );
+            entries.add(
+              PromptSourceEntry(
+                kind: PromptSourceKind.youtubeVideo,
+                label: 'YouTube video',
+                attachmentNumber: n,
+              ),
+            );
+          } else if (!caps.youtube) {
+            throw TranscriptUnavailableException(
+              "YouTube captions can't be loaded in the browser, and "
+              '${id.displayName} cannot watch videos. Use Google Gemini or '
+              'paste the text instead.',
+            );
+          } else {
+            final transcript = await _transcripts.fetchTranscript(url);
+            entries.add(
+              PromptSourceEntry(
+                kind: PromptSourceKind.youtubeTranscript,
+                label: transcript.title ?? 'YouTube video',
+                text: transcript.text,
+                autoGenerated: transcript.isAutoGenerated,
+              ),
+            );
+          }
       }
     }
     return _Prepared(
       provider: provider,
-      nativeVideoUrl: nativeVideoUrl,
-      source: PromptSource(
-        contextText: text == null ? null : _truncateContext(text),
-        transcript: transcript,
-        nativeVideo: nativeVideoUrl != null,
-      ),
+      attachments: attachments,
+      source: PromptSource(_fitTextBudget(entries)),
     );
   }
 
-  String _truncateContext(String text) {
-    if (text.length <= maxContextChars) return text;
-    return '${text.substring(0, maxContextChars)}\n\n[Source truncated: '
-        'showing the first $maxContextChars of ${text.length} characters.]';
+  Future<AiCapabilities> _capabilitiesFor(
+    AiSelection selection,
+    String? baseUrl,
+  ) async {
+    final Object store = _keys;
+    final Set<AiInputKind> manual = store is AiCapabilityOverrideStore
+        ? await store.getInputOverride(selection.providerId, selection.model)
+        : const {};
+    final resolver = capabilities;
+    if (resolver != null) {
+      return resolver.resolve(
+        provider: selection.providerId,
+        model: selection.model,
+        baseUrl: baseUrl,
+        manualOverride: manual,
+      );
+    }
+    return staticCapabilities(
+      selection.providerId,
+      selection.model,
+      manual: manual,
+      isWeb: isWeb,
+    );
+  }
+
+  static String _unsupportedMessage(
+    AiSelection selection,
+    AiInputKind kind,
+    String fileName,
+  ) {
+    final who = '${selection.model} (${selection.providerId.displayName})';
+    final hint = switch (kind) {
+      AiInputKind.audio ||
+      AiInputKind.video => 'Audio and video need a Google Gemini model.',
+      _ when selection.providerId == LlmProviderId.openaiCompatible =>
+        'Pick a model that accepts ${kind.plural}, or mark this model as '
+            'supporting them in Settings if it does.',
+      _ => 'Pick a model that accepts ${kind.plural} (e.g. a vision model).',
+    };
+    return "$who can't read ${kind.plural} (\"$fileName\"). $hint";
+  }
+
+  /// Shares [maxContextChars] among the user-provided text sources (pasted
+  /// text, notes, text files; transcripts have their own budget): short
+  /// sources are kept whole, long ones are cut evenly, with a note.
+  List<PromptSourceEntry> _fitTextBudget(List<PromptSourceEntry> entries) {
+    final budgeted = [
+      for (var i = 0; i < entries.length; i++)
+        if (entries[i].isText &&
+            entries[i].kind != PromptSourceKind.youtubeTranscript)
+          i,
+    ];
+    final total = budgeted.fold<int>(
+      0,
+      (sum, i) => sum + entries[i].text!.length,
+    );
+    if (total <= maxContextChars) return entries;
+    final byLength = [...budgeted]
+      ..sort((a, b) => entries[a].text!.length - entries[b].text!.length);
+    final allowance = <int, int>{};
+    var remaining = maxContextChars;
+    for (var k = 0; k < byLength.length; k++) {
+      final i = byLength[k];
+      final share = remaining ~/ (byLength.length - k);
+      final length = entries[i].text!.length;
+      final take = length < share ? length : share;
+      allowance[i] = take;
+      remaining -= take;
+    }
+    return [
+      for (var i = 0; i < entries.length; i++)
+        allowance.containsKey(i)
+            ? PromptSourceEntry(
+                kind: entries[i].kind,
+                label: entries[i].label,
+                text: _truncate(entries[i].text!, allowance[i]!),
+              )
+            : entries[i],
+    ];
+  }
+
+  static String _truncate(String text, int max) {
+    if (text.length <= max) return text;
+    return '${text.substring(0, max)}\n\n[Source truncated: showing the '
+        'first $max of ${text.length} characters.]';
   }
 
   /// Calls the provider, validates, and on invalid JSON / validation errors
@@ -277,7 +537,7 @@ class DefaultAiService implements AiService {
     required String user,
     required Map<String, Object?> schema,
     required String schemaName,
-    required String? youtubeUrl,
+    required List<LlmAttachment> attachments,
     required String what,
     required DraftValidation<T> Function(Map<String, dynamic> json) validate,
   }) async {
@@ -285,8 +545,8 @@ class DefaultAiService implements AiService {
       prompt: prompt,
       schema: schema,
       schemaName: schemaName,
-      youtubeUrl: youtubeUrl,
       systemPrompt: system,
+      attachments: attachments,
     );
 
     String previous;
@@ -352,10 +612,10 @@ class _Prepared {
   const _Prepared({
     required this.provider,
     required this.source,
-    this.nativeVideoUrl,
+    required this.attachments,
   });
 
   final LlmProvider provider;
   final PromptSource source;
-  final String? nativeVideoUrl;
+  final List<LlmAttachment> attachments;
 }

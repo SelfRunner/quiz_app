@@ -573,6 +573,95 @@ automatic repair retry may double it); show progress and disable the button.
 Limits: 1-50 questions; pasted text over 100k chars and transcripts over 60k
 chars are truncated with a note.
 
+**Sources (Wave 1).** Requests take `sources: List<AiSource>`
+(`lib/ai/ai_source.dart`, re-exported by `ai_service.dart`); the legacy
+`contextText` / `youtubeUrl` fields still work and are listed first.
+
+```dart
+QuizGenerationRequest(questionCount: 10, sources: [
+  TextSource(text: pasted),                         // label defaults to 'Pasted text'
+  NoteSource(title: note.title, markdown: note.contentMarkdown),
+  FileSource(name: 'lecture.pdf', mimeType: 'application/pdf', bytes: bytes),
+  YoutubeSource(url),
+]);
+```
+
+* Text-like files (.txt/.md/.csv/.json/`text/*`, .docx) are converted to
+  text in-app and work with every model. `TextExtractor.extract(name, mime,
+  bytes)` (`lib/ai/text_extractor.dart`) returns the text or null (not a
+  text type), throws `ValidationException` for a corrupt .docx; the data
+  layer can store the result as `extracted_text`. `TextExtractor.canExtract`
+  / `AiInputKind.ofFile(name, mime)` classify a file (null = unsupported).
+* PDF / image / audio / video are sent as attachments if the selected model
+  supports the kind (see capabilities), otherwise `AiException(unsupported)`
+  naming model + limitation (nothing is sent). Unknown types (zip, .doc, ...)
+  -> `AiException(unsupported)`. Size limits (`ProviderLimits`,
+  `lib/ai/providers/attachment_support.dart`) -> `ValidationException`:
+  Gemini 2 GB/file (inline base64 up to 15 MB per request, larger via the
+  Files API: resumable upload, polled until `ACTIVE`); OpenAI 50 MB/file and
+  per request; Anthropic 24 MB per request, images 5 MB (png/jpeg/webp/gif);
+  OpenAI-compatible 20 MB/file, 30 MB per request.
+* Wire formats: Gemini `inlineData` / `fileData{mimeType, fileUri}`; OpenAI
+  Responses `input_file{filename, file_data: data URL}` / `input_image`;
+  Anthropic `document` (base64 PDF, `title`) / `image`; OpenAI-compatible
+  `image_url` data URL / `file{filename, file_data}` (OpenRouter PDF format).
+  Each attachment is preceded by a text part `Attachment N: <name>`.
+* The prompt lists every source as `[Source N] <kind> "<label>"` (text
+  inside `<source id="N">`), refers to attachments by number and tells the
+  model to ground everything in the sources. Text sources share the 100k
+  char budget fairly (long ones are cut with a note).
+* Generic generation (future decks): `DefaultAiService.generateStructured<T>(
+  StructuredGenerationRequest(sources:, task:, systemPrompt:, schema:,
+  schemaName:, ...), validate: (json) => DraftValidation(...))` — same
+  source handling and one repair retry. (Not on the `AiService` interface
+  yet, to keep existing fakes compiling; cast or add it when decks land.)
+
+**Readiness / gating.** `aiReadinessProvider` (`FutureProvider<AiReadiness>`,
+never errors) drives locked AI entry points:
+
+```dart
+final r = ref.watch(aiReadinessProvider).value;      // null while first loading
+if (r == null || !r.isConfigured) { /* lock icon; sheet shows r?.reason -> Settings */ }
+r.providerId; r.model;                               // what will be used
+r.capabilities.pdf / .image / .audio / .video / .youtube / .youtubeNative
+```
+
+Ready = a provider (selected, else the first with a key) with an API key and
+a model (stored or `defaultModel`). OpenAI-compatible endpoints other than
+OpenRouter (Ollama, LM Studio) may have no key: a stored base URL + stored
+model suffice (generation and `resolveSelection` accept them too).
+`issue` is one of `noProvider` (also signed out), `missingApiKey`,
+`missingModel`, `invalidBaseUrl`, `storageError`. It recomputes on user
+change and on every write through `apiKeyStoreProvider` (the store is
+wrapped in `NotifyingApiKeyStore`, which bumps `aiSettingsRevisionProvider`;
+if you write through some other store instance, call
+`ref.read(aiSettingsRevisionProvider.notifier).bump()`). Tests overriding
+`apiKeyStoreProvider` with a plain fake get no automatic refresh.
+
+**Capabilities** (`lib/ai/ai_capabilities.dart`).
+`AiCapabilities.forModel(provider, model)` (static) and
+`aiCapabilityResolverProvider` (`AiCapabilityResolver.resolve(provider:,
+model:, baseUrl:, manualOverride:)`):
+
+| Provider | text | pdf | image | audio | video | youtube |
+|---|---|---|---|---|---|---|
+| Gemini `gemini-*` | ✓ | ✓ | ✓ | ✓ | ✓ | native |
+| OpenAI gpt-4o*/4.1*/4.5*/5*/o1/o3/o4* (not o1-mini/o3-mini) | ✓ | ✓ | ✓ | - | - | transcript |
+| OpenAI other | ✓ | - | - | - | - | transcript |
+| Anthropic `claude-*` (3+) | ✓ | ✓ | ✓ | - | - | transcript |
+| OpenRouter | ✓ | `file` in `input_modalities` | `image` in it | - | - | transcript |
+| other OpenAI-compatible | ✓ | override | override | - | - | transcript |
+
+"transcript" = not on web (YouTube blocks it); a YouTube source there throws
+`TranscriptUnavailableException`. OpenRouter metadata comes from the public
+`GET {base}/models` (no key), cached 6 h per base URL; failures/unknown
+models = text only. Manual override (Settings: "This model supports images /
+PDF", OpenAI-compatible only): the store from `apiKeyStoreProvider` also
+implements `AiCapabilityOverrideStore` —
+`(store as AiCapabilityOverrideStore).setInputOverride(p, model,
+{AiInputKind.image, AiInputKind.pdf})` / `getInputOverride(p, model)`
+(per provider + model; empty set clears).
+
 **YouTube.** Gemini receives the URL natively (any form: watch, youtu.be,
 shorts, embed, live; public videos only). Other providers get the captions via
 `transcriptServiceProvider` (manual English > auto English > first track).
@@ -615,9 +704,9 @@ field validator (`baseUrlProblem`).
 | `AiException(rateLimited)` | 429, quota/credits exhausted (402) | retry later |
 | `AiException(invalidOutput)` | bad JSON/validation twice, or output cut off | retry / fewer questions / other model |
 | `AiException(provider)` | refusal, safety block, 404 model, 5xx | show message |
-| `AiException(unsupported)` | internal (YouTube URL to non-Gemini) | n/a |
+| `AiException(unsupported)` | file kind the model can't take (message names model + kind), unknown file type, wrong image format | pick another model / remove file |
 | `TranscriptUnavailableException` | no captions, private video, YouTube blocked (always on web) | suggest Gemini or pasting text |
-| `ValidationException` | no input, bad YouTube URL, count out of range | inline field error |
+| `ValidationException` | no input, bad YouTube URL, count out of range, file too large, empty/corrupt text file | inline field error |
 | `NetworkException` | offline, timeout (5 min), CORS (web) | retry |
 
 **Endpoints.** Gemini `v1beta/models/{m}:generateContent`

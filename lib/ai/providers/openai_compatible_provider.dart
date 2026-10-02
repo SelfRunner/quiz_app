@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import '../../core/errors/app_exception.dart';
+import '../ai_source.dart';
 import '../llm_provider.dart';
+import 'attachment_support.dart';
 import 'http_support.dart';
 import 'schema_adapters.dart';
 
@@ -27,6 +29,10 @@ enum CompatJsonMode {
 /// * Tries `json_schema` (strict) first; if the endpoint rejects it with a
 ///   400/422 falls back to `json_object`, then to prompt-only JSON. The
 ///   working mode is remembered for this instance.
+/// * Attachments: the user message `content` becomes parts: `text` labels,
+///   `image_url` (data URL) for images and `file` (`filename` + base64
+///   `file_data` data URL, OpenRouter's PDF format) for PDFs, then the
+///   prompt. Whether the model accepts them is decided by `AiCapabilities`.
 /// * `GET {baseUrl}/models`. For OpenRouter `testConnection` additionally
 ///   calls `GET {baseUrl}/key`, since `/models` does not need a key there.
 class OpenAiCompatibleProvider extends HttpLlmProvider {
@@ -88,14 +94,10 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
     String? schemaName,
     String? youtubeUrl,
     String? systemPrompt,
+    List<LlmAttachment> attachments = const [],
   }) async {
-    if (youtubeUrl != null) {
-      throw AiException(
-        '$displayName cannot watch YouTube videos directly; a transcript is '
-        'used instead.',
-        kind: AiErrorKind.unsupported,
-      );
-    }
+    rejectYoutube(attachments, youtubeUrl, displayName);
+    ProviderLimits.openaiCompatible.check(attachments, displayName);
     final strictSchema = toOpenAiStrictSchema(schema);
     final reject = RegExp(
       r'response_format|json_schema|json_object|structured|schema|'
@@ -107,7 +109,14 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
         final response = await postJson(
           joinUrl(_base, '/chat/completions'),
           headers: _headers,
-          body: _body(_mode, prompt, systemPrompt, strictSchema, schemaName),
+          body: _body(
+            _mode,
+            prompt,
+            systemPrompt,
+            strictSchema,
+            schemaName,
+            attachments,
+          ),
         );
         return _parse(response);
       } on AiException catch (e) {
@@ -127,6 +136,7 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
     String? systemPrompt,
     Map<String, Object?> schema,
     String? schemaName,
+    List<LlmAttachment> attachments,
   ) {
     final system = [
       if (systemPrompt != null && systemPrompt.isNotEmpty) systemPrompt,
@@ -138,7 +148,12 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
       'model': config.model,
       'messages': [
         if (system.isNotEmpty) {'role': 'system', 'content': system},
-        {'role': 'user', 'content': prompt},
+        {
+          'role': 'user',
+          'content': attachments.isEmpty
+              ? prompt
+              : _content(prompt, attachments),
+        },
       ],
       if (mode == CompatJsonMode.jsonSchema)
         'response_format': {
@@ -153,6 +168,29 @@ class OpenAiCompatibleProvider extends HttpLlmProvider {
         'response_format': {'type': 'json_object'},
     };
   }
+
+  static List<Map<String, Object?>> _content(
+    String prompt,
+    List<LlmAttachment> attachments,
+  ) => [
+    for (final a in attachments.whereType<LlmFileAttachment>()) ...[
+      {'type': 'text', 'text': a.label},
+      if (a.kind == AiInputKind.image)
+        {
+          'type': 'image_url',
+          'image_url': {'url': dataUrl(a.mimeType, a.bytes)},
+        }
+      else
+        {
+          'type': 'file',
+          'file': {
+            'filename': a.filename,
+            'file_data': dataUrl(a.mimeType, a.bytes),
+          },
+        },
+    ],
+    {'type': 'text', 'text': prompt},
+  ];
 
   Map<String, dynamic> _parse(Map<String, dynamic> response) {
     final choices = response['choices'];

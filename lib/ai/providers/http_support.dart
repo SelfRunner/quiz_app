@@ -72,9 +72,27 @@ abstract class HttpLlmProvider implements LlmProvider {
     Future<http.Response> Function() request,
     Duration timeout,
   ) async {
+    final response = await sendRaw(request, timeout: timeout);
+    final body = _decodeBody(response);
+    if (body == null) {
+      throw AiException(
+        '$displayName returned an unexpected response.',
+        statusCode: response.statusCode,
+      );
+    }
+    return body;
+  }
+
+  /// Sends [request] with transport-error mapping; non-2xx responses throw
+  /// the mapped [AiException]. Returns the raw 2xx response (for endpoints
+  /// whose result is in headers, e.g. resumable uploads).
+  Future<http.Response> sendRaw(
+    Future<http.Response> Function() request, {
+    Duration? timeout,
+  }) async {
     final http.Response response;
     try {
-      response = await request().timeout(timeout);
+      response = await request().timeout(timeout ?? generateTimeout);
     } on TimeoutException catch (e, st) {
       throw NetworkException(
         '$displayName took too long to respond. Try again, use a faster '
@@ -93,20 +111,13 @@ abstract class HttpLlmProvider implements LlmProvider {
         stackTrace: st,
       );
     }
-    final body = _decodeBody(response);
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (body == null) {
-        throw AiException(
-          '$displayName returned an unexpected response.',
-          statusCode: response.statusCode,
-        );
-      }
-      return body;
+      return response;
     }
     throw mapHttpError(
       providerName: displayName,
       statusCode: response.statusCode,
-      body: body,
+      body: _decodeBody(response),
       rawBody: response.body,
       apiKey: config.apiKey,
     );

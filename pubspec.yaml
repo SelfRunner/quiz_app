@@ -54,6 +54,8 @@ dependencies:
   path: ^1.9.1
   intl: ^0.20.3
   meta: ^1.19.0
+  # .docx text extraction for AI sources (lib/ai/text_extractor.dart).
+  archive: ^4.0.0
 
 dev_dependencies:
   flutter_test:
