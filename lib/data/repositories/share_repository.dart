@@ -1,7 +1,8 @@
 import '../models/profile.dart';
 import '../models/share.dart';
 
-/// Sharing (online-only; throws `NetworkException` when offline).
+/// Sharing (online-only; throws `NetworkException` when offline), except
+/// [sharedWithMe], which serves the last list cached in Hive when offline.
 ///
 /// Shares are view-only. Sharing a subject grants live access to all its
 /// current and future notes/quizzes. Shared rows are pulled into Hive by sync,
@@ -12,8 +13,10 @@ abstract interface class ShareRepository {
   Future<Profile?> findUserByEmail(String email);
 
   /// Shares a resource owned by the current user with [recipientId].
-  /// Idempotent per (type, id, recipient). Throws `ValidationException` when
-  /// sharing with yourself.
+  /// Throws `AlreadySharedException` (a `ValidationException`) when it is
+  /// already shared with that user, `ValidationException` when sharing with
+  /// yourself, and `NetworkException` when the resource hasn't been uploaded
+  /// yet (its create is still queued).
   Future<Share> share({
     required ShareResourceType resourceType,
     required String resourceId,
@@ -31,7 +34,10 @@ abstract interface class ShareRepository {
   );
 
   /// Shares where the current user is the recipient, with `owner` profiles
-  /// and `resourceTitle` filled when available.
+  /// and `resourceTitle` filled when available. Offline (or when the request
+  /// fails in transit) returns the last list fetched online, persisted in
+  /// Hive, adjusted to shares seen by later syncs; throws `NetworkException`
+  /// only when nothing is cached.
   Future<List<Share>> sharedWithMe();
 
   /// Deep-copies a shared resource into the current user's account (via the

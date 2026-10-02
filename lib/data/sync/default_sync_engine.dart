@@ -37,8 +37,11 @@ class SyncRejection {
 /// - permanent error (RLS 42501, constraint, 4xx): op dropped, the server
 ///   version of the row (if visible) replaces the local one, the rejection is
 ///   reported via [rejections] and `SyncStatus.error`. The queue never blocks.
-/// - transient error (5xx, unknown): `attempts++`; dropped as permanent after
-///   [maxAttempts]; retried with exponential backoff.
+/// - transient error (5xx, unknown): `attempts++`, retried with capped
+///   exponential backoff, **never dropped** (an outage must not lose data).
+///   Ops with `attempts >= maxAttempts` are reported as `SyncStatus.stuckOps`.
+/// - rejected upserts keep the user's row JSON in `sync_meta`
+///   ([rejectedChanges]) until [dismissRejectedChange].
 ///
 /// **Pull**: per table, keyset pages of `(updated_at, id) > cursor` ordered
 /// ascending. The cursor is the max server `updated_at` (raw string) seen, so
@@ -73,9 +76,12 @@ class DefaultSyncEngine implements SyncEngine {
     this.maxAttempts = 8,
     this.maxRetryDelay = const Duration(minutes: 5),
   }) : imageCopies = NoteImageCopyProcessor(imageRemote, db.images) {
+    _rejectedCount = db.meta.rejectedChanges.length;
     _status = SyncStatus(
       lastSyncedAt: db.meta.lastSyncedAt,
       pendingOps: db.outbox.length,
+      stuckOps: _countStuck(),
+      rejectedChanges: _rejectedCount,
     );
   }
 
@@ -96,6 +102,8 @@ class DefaultSyncEngine implements SyncEngine {
   final Duration localWriteDebounce;
   final Duration reconcileInterval;
   final Duration pullLookback;
+
+  /// Transient failures after which an op counts as "stuck" (still retried).
   final int maxAttempts;
   final Duration maxRetryDelay;
 
@@ -108,6 +116,7 @@ class DefaultSyncEngine implements SyncEngine {
       StreamController<SyncRejection>.broadcast();
   final List<StreamSubscription<Object?>> _subs = [];
   late SyncStatus _status;
+  int _rejectedCount = 0;
 
   Future<void>? _current;
   bool _rerun = false;
@@ -126,6 +135,16 @@ class DefaultSyncEngine implements SyncEngine {
 
   /// Server rejections (dropped ops), for UI snackbars / diagnostics.
   Stream<SyncRejection> get rejections => _rejections.stream;
+
+  /// Rejected changes whose content is kept locally (oldest first).
+  List<RejectedChange> get rejectedChanges => db.meta.rejectedChanges;
+
+  /// Forgets a kept rejected change (e.g. after the user re-applied it).
+  Future<void> dismissRejectedChange(String id) async {
+    await db.meta.removeRejectedChange(id);
+    _rejectedCount = db.meta.rejectedChanges.length;
+    _emit(_status);
+  }
 
   @override
   Stream<SyncStatus> get status => Stream<SyncStatus>.multi((controller) {
@@ -221,14 +240,18 @@ class DefaultSyncEngine implements SyncEngine {
     final previous = _userId;
     _userId = userId;
     if (userId == null) {
-      // Signed out: abort any running cycle, then wipe user-scoped data.
+      // Signed out: abort any running cycle and stop syncing, but keep local
+      // data. The session may have ended involuntarily (refresh token
+      // revoked/expired); unpushed changes are pushed when the same user
+      // signs back in. Data is wiped by [clearAfterSignOut] (explicit
+      // sign-out) or when a different user signs in ([_ensureUserScope]).
       _generation++;
       await _awaitCurrent();
       if (_disposed) return;
-      await db.clearUserData();
       _consecutiveFailures = 0;
       _retry?.cancel();
-      _emit(const SyncStatus());
+      _debounce?.cancel();
+      _emit(SyncStatus(lastSyncedAt: db.meta.lastSyncedAt));
       return;
     }
     if (previous != null && previous != userId) {
@@ -246,12 +269,42 @@ class DefaultSyncEngine implements SyncEngine {
     _requestSync();
   }
 
+  /// Wipes all user-scoped local data (entities, outbox, sync meta, image
+  /// cache) after an explicit, user-initiated sign-out. Serialized with auth
+  /// handling; aborts a running cycle first. No-op if a user is signed in
+  /// again by the time it runs.
+  Future<void> clearAfterSignOut() {
+    final done = _userChain.then((_) async {
+      if (_currentUserId() != null) return;
+      if (_hasUserStream) _userId = null;
+      _generation++;
+      await _awaitCurrent();
+      await db.clearUserData();
+      _rejectedCount = 0;
+      _consecutiveFailures = 0;
+      _retry?.cancel();
+      _debounce?.cancel();
+      if (!_disposed) _emit(const SyncStatus());
+    });
+    _userChain = done.catchError((Object _) {});
+    return done;
+  }
+
   void _onConnectivity(bool online) {
     final wasOnline = _online;
     _online = online;
+    if (_current != null) {
+      // A running cycle may already have checked connectivity (its result is
+      // now stale) and would end in the wrong state, e.g. `idle` although we
+      // just went offline, or `offline` although we are back online with no
+      // further trigger. Run one more cycle; `sync()` callers joining the
+      // running cycle also wait for it.
+      _rerun = true;
+      return;
+    }
     if (online && (!wasOnline || _status.state == SyncState.offline)) {
       _requestSync();
-    } else if (!online && _current == null && _user != null) {
+    } else if (!online && _user != null) {
       _emit(_status.copyWith(state: SyncState.offline));
     }
   }
@@ -345,11 +398,19 @@ class DefaultSyncEngine implements SyncEngine {
         _consecutiveFailures = 0;
         _retry?.cancel();
       }
+      final stuck = _countStuck();
+      if (stuck > 0) {
+        problems.add(
+          '$stuck change${stuck == 1 ? '' : 's'} could not be saved yet '
+          '(server error). Retrying automatically.',
+        );
+      }
       _emit(
         _status.copyWith(
           state: problems.isEmpty ? SyncState.idle : SyncState.error,
           lastSyncedAt: now,
           error: problems.isEmpty ? null : problems.join('\n'),
+          stuckOps: stuck,
         ),
       );
     } on _Aborted {
@@ -418,19 +479,20 @@ class DefaultSyncEngine implements SyncEngine {
               await _reject(op, e, gen, problems);
               progressed = true;
             case RemoteErrorKind.transient:
-              final updated = await db.outbox.recordFailure(op, e.message);
-              if (updated.attempts >= maxAttempts) {
-                await _reject(op, e, gen, problems);
-              } else {
-                retryLater = true;
-              }
+              // Server trouble (5xx, timeouts, unknown): never drop, keep
+              // retrying with capped backoff. Attempts only flag "stuck".
+              await db.outbox.recordFailure(op, e.message);
+              retryLater = true;
           }
         }
       }
       queue = deferred;
       if (!progressed) break;
     }
-    // Ops still blocked on a missing parent: count as failed attempts.
+    // Ops still blocked on a missing parent: count as failed attempts, unless
+    // other ops failed transiently in this cycle (the parent may be one of
+    // them; it must not be dropped because of a server outage).
+    if (retryLater) return true;
     for (final op in queue) {
       _checkActive(gen);
       final updated = await db.outbox.recordFailure(
@@ -505,10 +567,23 @@ class DefaultSyncEngine implements SyncEngine {
     };
     final message = 'The server rejected a change to $what: ${e.message}';
     problems.add(message);
+    final at = _clock();
     if (!_rejections.isClosed) {
-      _rejections.add(SyncRejection(op: op, message: message, at: _clock()));
+      _rejections.add(SyncRejection(op: op, message: message, at: at));
     }
     if (op.op == OutboxOpType.upsert && SyncTables.synced.contains(op.table)) {
+      // Keep the user's version before the server's replaces it locally.
+      await db.meta.addRejectedChange(
+        RejectedChange(
+          id: op.id,
+          table: op.table,
+          rowId: op.rowId,
+          payload: op.payload,
+          message: message,
+          at: at,
+        ),
+      );
+      _rejectedCount = db.meta.rejectedChanges.length;
       // Restore the server's version so local state does not silently
       // diverge (if the row is not visible, the local copy is kept).
       try {
@@ -737,8 +812,14 @@ class DefaultSyncEngine implements SyncEngine {
     if (gen != _generation || _disposed) throw const _Aborted();
   }
 
+  int _countStuck() =>
+      db.outbox.pending().where((op) => op.attempts >= maxAttempts).length;
+
   void _emit(SyncStatus next) {
-    final withCount = next.copyWith(pendingOps: db.outbox.length);
+    final withCount = next.copyWith(
+      pendingOps: db.outbox.length,
+      rejectedChanges: _rejectedCount,
+    );
     if (withCount == _status) return;
     _status = withCount;
     if (!_statusController.isClosed) _statusController.add(withCount);

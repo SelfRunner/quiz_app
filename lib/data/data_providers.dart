@@ -82,6 +82,14 @@ final Provider<AuthRepository> authRepositoryProvider =
         ref.watch(supabaseClientProvider),
         // Push pending changes before local data is wiped on sign-out.
         beforeSignOut: () => ref.read(syncEngineProvider).sync(),
+        // Explicit sign-out only: wipe user-scoped local data. Involuntary
+        // sign-outs (expired/revoked session) keep it for the same user.
+        afterSignOut: () {
+          final engine = ref.read(syncEngineProvider);
+          return engine is DefaultSyncEngine
+              ? engine.clearAfterSignOut()
+              : ref.read(localDatabaseProvider).clearUserData();
+        },
       ),
     );
 

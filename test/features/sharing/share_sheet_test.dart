@@ -120,6 +120,30 @@ void main() {
     expect(repo.sharesByResource['s1'], hasLength(1));
   });
 
+  testWidgets('reports AlreadySharedException from the server and refreshes '
+      'a stale list', (tester) async {
+    await _open(tester, repo);
+    expect(find.textContaining('Only you can see this'), findsOneWidget);
+    // Shared meanwhile from another device: the loaded list is stale, so the
+    // pre-check passes and the server's unique constraint answers.
+    repo.sharesByResource['s1'] = [
+      makeShare(
+        id: 'sh1',
+        type: ShareResourceType.subject,
+        resourceId: 's1',
+        ownerId: meId,
+        recipientId: 'bob',
+        recipient: profile('bob', name: 'Bob'),
+      ),
+    ];
+    await _submitEmail(tester, 'bob@example.com');
+
+    expect(find.text('Already shared with Bob.'), findsOneWidget);
+    expect(find.textContaining('Only you can see this'), findsNothing);
+    expect(find.byKey(const ValueKey('recipient-sh1')), findsOneWidget);
+    expect(repo.sharesByResource['s1'], hasLength(1));
+  });
+
   testWidgets('shows an offline state when the list cannot load', (
     tester,
   ) async {

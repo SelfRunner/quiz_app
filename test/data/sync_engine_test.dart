@@ -233,6 +233,42 @@ void main() {
     expect(engine.currentStatus.state, SyncState.error);
     expect(engine.currentStatus.error, contains('rejected'));
     expect(rejections.single.op.rowId, bad.id);
+
+    // The user's version is kept (the server has none to restore here).
+    final kept = engine.rejectedChanges.single;
+    expect(kept.rowId, bad.id);
+    expect(kept.table, SyncTables.subjects);
+    expect(kept.payload!['title'], 'bad');
+    expect(engine.currentStatus.rejectedChanges, 1);
+
+    await engine.dismissRejectedChange(kept.id);
+    expect(engine.rejectedChanges, isEmpty);
+    expect(engine.currentStatus.rejectedChanges, 0);
+  });
+
+  test('rejected edit: server version restored, user content kept', () async {
+    final engine = makeEngine();
+    final s = await subjects.create(title: 'S');
+    final n = await notes.create(subjectId: s.id, title: 'N');
+    await engine.sync();
+    await notes.update(
+      h.db.notes.get(n.id)!.copyWith(contentMd: 'my precious edit'),
+    );
+    remote.upsertHook = (_, _) => const RemoteException(
+      RemoteErrorKind.permanent,
+      'check constraint',
+      code: '23514',
+    );
+
+    await engine.sync();
+
+    expect(h.db.notes.get(n.id)!.contentMd, ''); // server version restored
+    final kept = engine.rejectedChanges.single;
+    expect(kept.payload!['content_md'], 'my precious edit');
+    // Survives a restart (persisted in sync_meta).
+    final restarted = makeEngine();
+    expect(restarted.rejectedChanges.single.id, kept.id);
+    expect(restarted.currentStatus.rejectedChanges, 1);
   });
 
   test(
@@ -253,19 +289,56 @@ void main() {
     },
   );
 
-  test('transient failures retry with attempts, then drop at max', () async {
+  test('transient failures are never dropped; flagged as stuck', () async {
     final engine = makeEngine(maxAttempts: 2);
-    await subjects.create(title: 'x');
+    final s = await subjects.create(title: 'x');
     remote.upsertHook = (_, _) =>
-        const RemoteException(RemoteErrorKind.transient, 'boom', code: '500');
+        const RemoteException(RemoteErrorKind.transient, 'boom', code: '503');
 
     await engine.sync();
     expect(h.db.outbox.pending().single.attempts, 1);
     expect(h.db.outbox.pending().single.lastError, 'boom');
+    expect(engine.currentStatus.stuckOps, 0);
 
+    // A long outage: many more failures than the threshold.
+    for (var i = 0; i < 5; i++) {
+      await engine.sync();
+    }
+    expect(h.db.outbox.pending().single.attempts, 6);
+    expect(engine.currentStatus.stuckOps, 1);
+    expect(engine.currentStatus.state, SyncState.error);
+    expect(engine.currentStatus.error, contains('Retrying automatically'));
+    expect(h.db.subjects.get(s.id)!.title, 'x'); // local row untouched
+    expect(engine.rejectedChanges, isEmpty);
+
+    // Server recovers: the op is pushed and the flag clears.
+    remote.upsertHook = null;
     await engine.sync();
     expect(h.db.outbox.length, 0);
-    expect(engine.currentStatus.state, SyncState.error);
+    expect(remote.tables['subjects']!.containsKey(s.id), isTrue);
+    expect(engine.currentStatus.stuckOps, 0);
+    expect(engine.currentStatus.state, SyncState.idle);
+  });
+
+  test('FK-blocked ops are not counted while their parent fails '
+      'transiently', () async {
+    final engine = makeEngine(maxAttempts: 1);
+    final s = await subjects.create(title: 'parent');
+    final n = await notes.create(subjectId: s.id, title: 'child');
+    remote.upsertHook = (table, _) => table == SyncTables.subjects
+        ? const RemoteException(RemoteErrorKind.transient, 'boom', code: '500')
+        : null;
+
+    for (var i = 0; i < 3; i++) {
+      await engine.sync();
+    }
+    expect(h.db.outbox.length, 2); // nothing dropped
+    expect(engine.rejectedChanges, isEmpty);
+
+    remote.upsertHook = null;
+    await engine.sync();
+    expect(h.db.outbox.length, 0);
+    expect(remote.tables['notes']!.containsKey(n.id), isTrue);
   });
 
   test('network failure: offline status, nothing dropped', () async {
@@ -359,7 +432,8 @@ void main() {
     expect(h.db.notes.get('bn'), isNotNull);
   });
 
-  test('sign-out clears user data; account switch starts clean', () async {
+  test('explicit sign-out clears user data; account switch starts '
+      'clean', () async {
     final users = StreamController<String?>.broadcast();
     final engine = makeEngine(users: users.stream)..start();
     await subjects.create(title: 'x');
@@ -384,11 +458,67 @@ void main() {
     users.add(null);
     await pumpEventQueue();
     await engine.authSettled;
+    // The auth stream alone never wipes (could be an expired session).
+    expect(h.db.subjects.all(), hasLength(1));
+
+    await engine.clearAfterSignOut();
     expect(h.db.subjects.all(), isEmpty);
     expect(h.db.outbox.length, 0);
     expect(h.db.meta.cursor('subjects'), isNull);
     expect(engine.currentStatus.state, SyncState.idle);
     await users.close();
+  });
+
+  test('involuntary sign-out keeps the outbox; the same user signing back '
+      'in pushes it', () async {
+    final users = StreamController<String?>.broadcast();
+    final engine = makeEngine(users: users.stream)..start();
+    await engine.authSettled;
+    await engine.sync();
+    remote.offline = true;
+    final s = await subjects.create(title: 'unsynced');
+    await engine.sync();
+    expect(h.db.outbox.length, 1);
+
+    // Refresh token revoked: the session ends without the user asking.
+    h.userId = null;
+    users.add(null);
+    await pumpEventQueue();
+    await engine.authSettled;
+    expect(h.db.subjects.get(s.id), isNotNull);
+    expect(h.db.outbox.length, 1);
+    final calls = remote.upsertCalls;
+    await engine.sync(); // signed out: nothing is attempted
+    expect(remote.upsertCalls, calls);
+
+    remote.offline = false;
+    h.userId = 'user-a';
+    users.add('user-a');
+    await pumpEventQueue();
+    await engine.authSettled;
+    await engine.sync();
+    expect(h.db.outbox.length, 0);
+    expect(remote.tables['subjects']!.containsKey(s.id), isTrue);
+
+    // A *different* user signing in after an involuntary sign-out starts
+    // clean.
+    h.userId = null;
+    users.add(null);
+    await pumpEventQueue();
+    h.userId = 'user-b';
+    remote.userId = 'user-b';
+    users.add('user-b');
+    await pumpEventQueue();
+    await engine.authSettled;
+    expect(h.db.subjects.all(), isEmpty);
+    await users.close();
+  });
+
+  test('clearAfterSignOut is a no-op when a user is signed in', () async {
+    final engine = makeEngine();
+    await subjects.create(title: 'x');
+    await engine.clearAfterSignOut();
+    expect(h.db.subjects.all(), hasLength(1));
   });
 
   test('local writes trigger a debounced sync after start()', () async {
@@ -403,7 +533,7 @@ void main() {
 
   test('connectivity regained triggers a sync', () async {
     final engine = makeEngine()..start();
-    await pumpEventQueue();
+    await engine.sync(); // joins the cycle start() kicked off
     connectivity.set(false);
     await subjects.create(title: 'offline edit');
     await engine.sync();
@@ -412,6 +542,50 @@ void main() {
     connectivity.set(true);
     await eventually(() => remote.tables['subjects']!.length == 1);
     await eventually(() => engine.currentStatus.state == SyncState.idle);
+  });
+
+  test('connectivity lost during a running cycle ends offline', () async {
+    final engine = makeEngine()..start();
+    await engine.sync();
+    await subjects.create(title: 'x');
+    final gate = Completer<void>();
+    remote.upsertDelay = () => gate.future;
+
+    final running = engine.sync();
+    await pumpEventQueue();
+    expect(engine.currentStatus.state, SyncState.syncing);
+    // The interface goes down, but the request in flight still succeeds.
+    connectivity.set(false);
+    await pumpEventQueue();
+    gate.complete();
+    // sync() callers wait for the follow-up cycle, which sees the change
+    // (before the fix the cycle ended `idle` while offline).
+    await running;
+    expect(h.db.outbox.length, 0);
+    expect(engine.currentStatus.state, SyncState.offline);
+  });
+
+  test('connectivity regained while a cycle checks connectivity is not '
+      'missed (stale isOnline result)', () async {
+    final engine = makeEngine()..start();
+    await engine.sync();
+    await subjects.create(title: 'x');
+    // The connection drops without an event (or the event is late), and the
+    // platform check is slow: the cycle reads "offline" ...
+    connectivity.online = false;
+    final gate = Completer<void>();
+    connectivity.checkDelay = () => gate.future;
+    final running = engine.sync();
+    await pumpEventQueue();
+    // ... but before it returns, connectivity comes back.
+    connectivity.checkDelay = null;
+    connectivity.set(true);
+    await pumpEventQueue();
+    gate.complete();
+    await running;
+
+    expect(remote.tables['subjects'], hasLength(1));
+    expect(engine.currentStatus.state, SyncState.idle);
   });
 
   test('status stream emits current value first, then changes', () async {

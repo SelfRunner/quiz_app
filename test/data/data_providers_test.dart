@@ -83,9 +83,13 @@ void main() {
       expect(remote.tables['subjects']!.containsKey(subject.id), isTrue);
       expect(engine.currentStatus.state, SyncState.idle);
 
+      // The auth stream emitting null (e.g. session expired) keeps data ...
       await auth.signOut();
       await pumpEventQueue();
       await (engine as DefaultSyncEngine).authSettled;
+      expect(h.db.subjects.all(), hasLength(1));
+      // ... an explicit sign-out (SupabaseAuthRepository.afterSignOut) wipes.
+      await engine.clearAfterSignOut();
       expect(h.db.subjects.all(), isEmpty);
       await auth.changes.close();
     },

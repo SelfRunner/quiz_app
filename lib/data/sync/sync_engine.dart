@@ -15,6 +15,15 @@ abstract class SyncStatus with _$SyncStatus {
 
     /// Message of the last error when [state] is [SyncState.error].
     String? error,
+
+    /// Outbox ops that keep failing with transient (5xx/unknown) errors and
+    /// have reached the attempt threshold. They are never dropped; sync keeps
+    /// retrying them with capped backoff.
+    @Default(0) int stuckOps,
+
+    /// Changes the server rejected permanently whose content is kept locally
+    /// (`DefaultSyncEngine.rejectedChanges`) until dismissed.
+    @Default(0) int rejectedChanges,
   }) = _SyncStatus;
 }
 
