@@ -1655,3 +1655,15 @@ Routes (in `AppRoutes`): `home` `/home` (shell, `DashboardScreen`), `study`
 
 Owners replace placeholder bodies keeping class names/constructors, so
 `app_router.dart` needs no further edits.
+
+## Wave 3 UI entry points
+
+Routes: `AppRoutes.chats` `/chats` (`ChatsScreen`), `chat(id)` `/chats/:id`
+(`ChatScreen(chatId)`), `search` `/search?q=` (`SearchScreen(initialQuery)`),
+`searchFor(query)`.
+
+| Entry point | File | Owner |
+|---|---|---|
+| `ChatLauncherButton(scopeType:, scopeId?, title:, compact)` | `lib/features/chat/widgets/chat_launcher.dart` | chat |
+| `ChatsScreen`, `ChatScreen` | `lib/features/chat/presentation/` | chat |
+| `SearchScreen` | `lib/features/search/presentation/` | search |

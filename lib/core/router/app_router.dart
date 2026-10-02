@@ -8,6 +8,8 @@ import '../../data/data_providers.dart';
 import '../../features/ai_generate/presentation/ai_generate_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/signup_screen.dart';
+import '../../features/chat/presentation/chat_screen.dart';
+import '../../features/chat/presentation/chats_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
 import '../../features/decks/presentation/deck_detail_screen.dart';
 import '../../features/decks/presentation/deck_edit_screen.dart';
@@ -17,6 +19,7 @@ import '../../features/notes/presentation/note_view_screen.dart';
 import '../../features/quizzes/presentation/quiz_detail_screen.dart';
 import '../../features/quizzes/presentation/quiz_edit_screen.dart';
 import '../../features/quizzes/presentation/quiz_play_screen.dart';
+import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sharing/presentation/shared_with_me_screen.dart';
 import '../../features/study/presentation/mistakes_screen.dart';
@@ -131,6 +134,22 @@ final routerProvider = Provider<GoRouter>((ref) {
                 DeckStudyScreen(deckId: state.pathParameters['id']!),
           ),
         ],
+      ),
+      GoRoute(
+        path: AppRoutes.chats,
+        builder: (context, state) => const ChatsScreen(),
+        routes: [
+          GoRoute(
+            path: ':id',
+            builder: (context, state) =>
+                ChatScreen(chatId: state.pathParameters['id']!),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: AppRoutes.search,
+        builder: (context, state) =>
+            SearchScreen(initialQuery: state.uri.queryParameters['q']),
       ),
       GoRoute(
         path: AppRoutes.mistakes,
