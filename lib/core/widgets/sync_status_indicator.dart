@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 
 import '../../data/data_providers.dart';
 import '../../data/sync/sync_engine.dart';
+import '../theme/app_colors.dart';
+import '../theme/tokens.dart';
 
 /// Human summary of a [SyncStatus].
 String describeSyncStatus(SyncStatus status, {DateTime? now}) {
@@ -54,19 +56,7 @@ class SyncStatusButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(syncStatusProvider).value;
     if (status == null) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
-    final Widget icon = switch (status.state) {
-      SyncState.syncing => const SizedBox.square(
-        dimension: 20,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
-      SyncState.offline => const Icon(Icons.cloud_off_outlined),
-      SyncState.error => Icon(Icons.sync_problem, color: scheme.error),
-      SyncState.idle when status.pendingOps > 0 => const Icon(
-        Icons.cloud_upload_outlined,
-      ),
-      SyncState.idle => const Icon(Icons.cloud_done_outlined),
-    };
+    final icon = syncStatusIcon(context, status);
     return IconButton(
       tooltip: '${describeSyncStatus(status)}\nTap for details',
       icon: Badge(
@@ -75,6 +65,76 @@ class SyncStatusButton extends ConsumerWidget {
         child: icon,
       ),
       onPressed: () => showSyncDetailsDialog(context),
+    );
+  }
+}
+
+/// Icon for a [SyncStatus] (shared by [SyncStatusButton]/[SyncStatusTile]).
+Widget syncStatusIcon(BuildContext context, SyncStatus status, {double? size}) {
+  final scheme = Theme.of(context).colorScheme;
+  return switch (status.state) {
+    SyncState.syncing => SizedBox.square(
+      dimension: size ?? 20,
+      child: const CircularProgressIndicator(strokeWidth: 2),
+    ),
+    SyncState.offline => Icon(Icons.cloud_off_outlined, size: size),
+    SyncState.error => Icon(
+      Icons.sync_problem,
+      color: scheme.error,
+      size: size,
+    ),
+    SyncState.idle when status.pendingOps > 0 => Icon(
+      Icons.cloud_upload_outlined,
+      size: size,
+    ),
+    SyncState.idle => Icon(Icons.cloud_done_outlined, size: size),
+  };
+}
+
+/// Sidebar row: sync icon + status text. Tap opens the sync details dialog.
+/// Hidden if the sync engine is unavailable.
+class SyncStatusTile extends ConsumerWidget {
+  const SyncStatusTile({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(syncStatusProvider).value;
+    if (status == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    return Tooltip(
+      message: 'Sync details',
+      child: InkWell(
+        borderRadius: Radii.mdAll,
+        onTap: () => showSyncDetailsDialog(context),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Insets.md,
+            vertical: Insets.sm,
+          ),
+          child: Row(
+            children: [
+              IconTheme.merge(
+                data: IconThemeData(color: colors.mutedText, size: 18),
+                child: syncStatusIcon(context, status, size: 18),
+              ),
+              Gaps.w12,
+              Expanded(
+                child: Text(
+                  describeSyncStatus(status),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: status.state == SyncState.error
+                        ? theme.colorScheme.error
+                        : colors.mutedText,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -92,10 +152,10 @@ class SyncStatusBanner extends ConsumerWidget {
             status.state != SyncState.error)) {
       return const SizedBox.shrink();
     }
-    final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
     final isError = status.state == SyncState.error;
-    final bg = isError ? scheme.errorContainer : scheme.secondaryContainer;
-    final fg = isError ? scheme.onErrorContainer : scheme.onSecondaryContainer;
+    final bg = isError ? colors.dangerContainer : colors.warningContainer;
+    final fg = isError ? colors.onDangerContainer : colors.onWarningContainer;
     return Material(
       color: bg,
       child: SafeArea(
