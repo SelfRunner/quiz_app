@@ -61,6 +61,29 @@ The tests impersonate users with `set local role authenticated` +
 policies; recent Supabase Storage versions add triggers on that table (e.g.
 blocking direct deletes), which the test tolerates by asserting the end state.
 
+## Live smoke test
+
+`scripts/supabase_smoke_test.dart` exercises the deployed project end to end
+over HTTP (Auth, PostgREST, Storage) with three throwaway users: profile
+trigger, RLS (owner/recipient/anon), shares (subject and note), duplicate
+share, quiz attempts privacy, `copy_subject` + `note_image_copies` + Storage
+copy, revocation, then best-effort cleanup.
+
+Prerequisites: migrations applied, Email provider enabled with **"Confirm
+email" OFF**, and `env.json` (repo root) with `SUPABASE_URL` and
+`SUPABASE_ANON_KEY`.
+
+```sh
+flutter pub get                                   # once (package:http)
+dart run scripts/supabase_smoke_test.dart         # or: ... path/to/env.json
+dart run scripts/supabase_smoke_test.dart --email-domain=yourdomain.dev   # if example.com is rejected
+```
+
+It prints a PASS/FAIL line per check and a summary, and exits 1 on any
+failure. Keys, passwords and JWTs are never printed. The test users cannot be
+deleted with the anon key; their emails are printed at the end so you can
+delete them under Authentication -> Users.
+
 ## Data model summary
 
 | Table | Notes |
