@@ -504,3 +504,18 @@ Web CORS: Gemini, OpenAI, Anthropic (via
 `anthropic-dangerous-direct-browser-access`) and OpenRouter allow browser
 calls; self-hosted endpoints (Ollama etc.) need CORS configured; YouTube
 captions are blocked in browsers.
+
+## Cross-feature UI entry points (Phase 2)
+
+Stubs exist so the three UI agents can depend on each other without touching
+each other's folders. Owners replace the bodies, keeping signatures.
+
+| Entry point | File | Owner | Used by |
+|---|---|---|---|
+| `showShareSheet(context, type:, resourceId:, title:)` | `lib/features/sharing/widgets/share_actions.dart` | sharing | subject/note/quiz screens (owner only) |
+| `CopyToAccountButton(type:, resourceId:)` | same file | sharing | subject/note/quiz screens when not owned |
+| `QuizListSection(subjectId:, noteId?, readOnly)` | `lib/features/quizzes/widgets/quiz_list_section.dart` | quizzes | `SubjectDetailScreen` (noteId null = subject-level quizzes), `NoteViewScreen` |
+
+AI note generation result is saved by the ai_generate feature (creates the note
+via `NoteRepository`, then navigates to `AppRoutes.noteEdit`). Subjects/notes
+screens only link to `AppRoutes.generate(...)`.
