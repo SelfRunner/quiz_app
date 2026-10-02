@@ -7,8 +7,8 @@ import '../models/share.dart';
 /// current and future notes/quizzes. Shared rows are pulled into Hive by sync,
 /// so `NoteRepository.watchBySubject` etc. also work for shared subjects.
 abstract interface class ShareRepository {
-  /// Exact email lookup via RPC. Returns null if no such user. Returned
-  /// profile has no email (only id + displayName).
+  /// Exact (case-insensitive, trimmed) email lookup via RPC. Returns null if
+  /// no such user. The profile has id, displayName and email.
   Future<Profile?> findUserByEmail(String email);
 
   /// Shares a resource owned by the current user with [recipientId].

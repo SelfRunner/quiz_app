@@ -93,7 +93,7 @@ properties required, nullables as `type: [x, 'null']`,
 - `shares(id, owner_id, recipient_id -> profiles, resource_type text check in ('subject','note','quiz'), resource_id uuid, created_at)` unique (resource_type, resource_id, recipient_id).
 - `owner_id` defaults to `auth.uid()`; `updated_at` is set by a trigger (`now()`) on insert/update and drives the sync cursor; client-provided `id` and `created_at` are accepted.
 - RPCs (`lib/data/remote/supabase_api.dart` `SupabaseRpc`):
-  `find_user_by_email(p_email text) returns table(id uuid, display_name text)`;
+  `find_user_by_email(p_email text) returns table(id uuid, display_name text, email text)`;
   `copy_subject(p_subject_id uuid) returns uuid`;
   `copy_note(p_note_id uuid, p_target_subject_id uuid) returns uuid`;
   `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null) returns uuid`.
@@ -108,7 +108,9 @@ TypeAdapters, so model changes never need Hive type-id migrations. Boxes:
 `subjects`, `notes`, `quizzes`, `quiz_attempts`, `outbox` (OutboxOp JSON by op
 id, FIFO by `createdAt`), `sync_meta` (cursors e.g. `cursor:{table}`), `prefs`
 (non-secret prefs). `HiveBoxes.clearAll()` on sign-out. The data agent may add
-boxes (e.g. image bytes cache) in `init()`.
+boxes (e.g. image bytes cache) in `init()`. Added: `note_image_bytes`
+(`Box<Uint8List>`, web image cache); sign-out clearing is done by the sync
+engine (see Data layer notes).
 
 ## Interfaces
 
@@ -302,6 +304,112 @@ class names/constructors, so `app_router.dart` needs no edits.
 
 Shared widgets used by several features go in `lib/core/widgets/`. Feature
 code may only depend on interfaces + providers listed above.
+
+## Data layer notes (Phase 1B, implemented)
+
+Implementation: `lib/data/local/` (Hive tables, outbox, sync meta, image
+cache), `lib/data/remote/` (`*RemoteDataSource` interfaces +
+`SupabaseRemoteDataSource`), `lib/data/sync/` (`DefaultSyncEngine`,
+`ConnectivityMonitor`, `NoteImageCopyProcessor`), `lib/data/repositories/`
+(`Local*Repository`, `LocalImageStore`, `SupabaseShareRepository`).
+
+**Using it from the UI**
+- Just use the repositories/providers above. Any repository read creates and
+  starts the sync engine (`dataContextProvider` watches `syncEngineProvider`),
+  so triggers are active as soon as the app shows data. The app shell may also
+  `ref.watch(syncStatusProvider)` for an indicator.
+- Sync status: `syncStatusProvider` -> `SyncStatus{state: idle|syncing|
+  offline|error, lastSyncedAt, pendingOps, error}`. `error` is a user-safe
+  message (may list several lines) and stays until the next successful cycle.
+- Manual sync / pull-to-refresh: `await ref.read(syncEngineProvider).sync()`
+  (never throws; concurrent calls join the running cycle).
+- Rejected changes (server refused an outbox op permanently, e.g. RLS
+  `42501`, CHECK `23514`): the op is dropped, the server version of the row
+  is restored locally, `status.error` is set, and
+  `(engine as DefaultSyncEngine).rejections` emits a `SyncRejection` (for a
+  snackbar).
+- Widget tests: override the repository providers (or `syncEngineProvider`
+  + `localDatabaseProvider` + `*RemoteDataSourceProvider`s) — the real
+  providers need Supabase and opened Hive boxes.
+
+**Sync triggers**: sign-in (and app start with a session), connectivity
+regained (`connectivity_plus`), app resumed/shown, every 5 min while
+foregrounded, 2 s after any local write (debounced), manual `sync()`, plus
+exponential backoff retries (5 s .. 5 min) after network/transient errors.
+`SupabaseAuthRepository.signOut` first tries a final push (max 10 s).
+
+**Sign-out / account switch**: all user-scoped boxes (entities, outbox,
+`sync_meta`, image cache) are wiped when the auth stream emits null or a
+different user id (`prefs` is kept). Unpushed changes are lost after the
+best-effort final push.
+
+**Sync algorithm**
+- Push: outbox FIFO; upserts of the same row coalesce in place. Network error
+  -> stop, `offline`; JWT error -> `error`; FK `23503` -> deferred and retried
+  (3 passes); permanent (`42501`, `23xxx`, `22xxx`, `P0001/P0002`, 4xx) ->
+  dropped + reported; transient (5xx/unknown) -> retried, dropped after 8
+  attempts.
+- After push, pending `note_image_copies` rows are processed (Storage copy
+  `from_path` -> `to_path`, then the row is deleted; also deleted when the
+  source is gone/unreadable or the target exists).
+- Pull: per table, keyset pages `(updated_at, id) > cursor` ascending, 500
+  rows. Cursor = raw server `updated_at` string + id of the last row
+  (`sync_meta` `cursor:{table}`), never the client clock; each sync starts
+  5 s before the cursor (transaction-start `now()` skew) and merges
+  idempotently.
+- Merge = last-write-wins: a pulled row replaces the local one unless the
+  outbox still has an op for that row. Other users' tombstones are purged
+  locally; own tombstones are kept (hidden from streams); unknown tombstones
+  are ignored. The server may normalize rows (e.g. `quiz.subject_id` follows
+  its note); the next pull corrects the local copy.
+- Shares: each sync lists `shares` where `recipient_id = me`. A new share ->
+  targeted fetch without cursor (subject: the subject + notes/quizzes by
+  `subject_id`; note: the note + quizzes by `note_id`; quiz: the quiz). A
+  revoked share (or every 30 min) -> reconciliation: ids of locally cached
+  rows owned by others are checked with `select id where id in (...)` and
+  rows no longer visible are purged (plus their cached images).
+
+**Repositories**: local-first; writes set `ownerId` = current user, client
+UUID, `createdAt/updatedAt` = now (server overwrites `updated_at`), then
+enqueue + write Hive. Non-owned rows -> `PermissionDeniedException` (also
+creating notes/quizzes under a shared subject/note). Deletes are soft and
+cascade locally: subject -> notes (+ their quizzes and own images) and
+quizzes; note -> its quizzes + own images. A quiz with `noteId` must use the
+note's subject (`ValidationException` otherwise); moving a note moves its
+quizzes. Attempts are always owned by the taker (allowed on shared quizzes).
+Signed out -> `AppAuthException`.
+
+**ShareRepository** (online-only): offline -> `NetworkException("You're
+offline. Sharing needs an internet connection.")`. `share()` pushes pending
+local changes first, is idempotent (unique violation -> returns existing),
+self-share -> `ValidationException`. Lists embed profiles via
+`profiles!shares_recipient_id_fkey` / `profiles!shares_owner_id_fkey`;
+`sharedWithMe()` fills `resourceTitle` from local cache, else the table.
+`findUserByEmail` returns `Profile(id, displayName, email)`.
+`copyToMyAccount` validates the target (note/quiz need an owned
+`targetSubjectId`; `targetNoteId` only for quizzes and must be in that
+subject), pushes pending changes, calls `copy_*` (returns the new root id),
+runs the image-copy queue, then waits for a fresh sync so the copy is in
+Hive when it returns.
+
+**Images**: Markdown uses `![alt](note-image://{ownerId}/{noteId}/{uuid}.{ext})`
+(`NoteImageRef.markdownUrl`). `ImageStore.saveNoteImage` (owned note only)
+stores bytes locally (files under app support dir on native, Hive box
+`note_image_bytes` on web) and queues `upload_image`; insert the returned
+`ref.markdownUrl`. Render with a markdown image builder:
+`NoteImageRef.tryParse(uri.toString())` -> `ref.watch(imageStoreProvider)
+.load(ref)` -> `Image.memory` (bytes come from memory/disk cache, else are
+downloaded and cached; null = unavailable/offline). `LocalImageStore
+.signedUrl(ref)` gives a 1 h signed URL if a network URL is needed.
+`ImageStore.delete` removes the local copy and queues `delete_image`.
+
+**Errors** (all `AppException`, `message` is user-safe): `AppAuthException`
+(signed out / session expired), `PermissionDeniedException` (read-only shared
+item, RLS), `NotFoundException` (missing row, RPC `P0002`),
+`ValidationException` (bad input, server CHECK/constraint, `P0001` with the
+SQL message), `NetworkException` (offline/unreachable; share ops only —
+local writes never fail offline), `StorageException` (Hive write failed),
+`UnknownException` (server 5xx).
 
 ## Platform notes
 

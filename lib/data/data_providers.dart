@@ -1,56 +1,147 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
+import 'local/local_database.dart';
 import 'models/models.dart';
+import 'remote/remote_data_source.dart';
+import 'remote/supabase_remote_data_source.dart';
 import 'repositories/attempt_repository.dart';
 import 'repositories/auth_repository.dart';
 import 'repositories/image_store.dart';
+import 'repositories/local_attempt_repository.dart';
+import 'repositories/local_image_store.dart';
+import 'repositories/local_note_repository.dart';
+import 'repositories/local_quiz_repository.dart';
+import 'repositories/local_subject_repository.dart';
 import 'repositories/note_repository.dart';
 import 'repositories/quiz_repository.dart';
+import 'repositories/repository_support.dart';
 import 'repositories/share_repository.dart';
 import 'repositories/subject_repository.dart';
 import 'repositories/supabase_auth_repository.dart';
+import 'repositories/supabase_share_repository.dart';
+import 'sync/connectivity_monitor.dart';
+import 'sync/default_sync_engine.dart';
+import 'sync/note_image_copy_processor.dart';
 import 'sync/sync_engine.dart';
 
 // ---------------------------------------------------------------------------
-// Service providers. The data/sync agent replaces the `throw` bodies with real
-// implementations; features only depend on the interfaces.
+// Infrastructure (data layer internals; override these in tests).
 // ---------------------------------------------------------------------------
 
-Never _unimplemented(String name) =>
-    throw UnimplementedError('$name is not implemented yet (data layer).');
-
-final authRepositoryProvider = Provider<AuthRepository>(
-  (ref) => SupabaseAuthRepository(ref.watch(supabaseClientProvider)),
+/// Hive-backed local database (boxes opened by `HiveBoxes.init`).
+final localDatabaseProvider = Provider<LocalDatabase>(
+  (ref) => LocalDatabase.fromOpenBoxes(
+    clock: ref.watch(clockProvider),
+    newId: ref.watch(idGeneratorProvider),
+  ),
 );
 
+final supabaseRemoteDataSourceProvider = Provider<SupabaseRemoteDataSource>(
+  (ref) => SupabaseRemoteDataSource(ref.watch(supabaseClientProvider)),
+);
+
+final syncRemoteDataSourceProvider = Provider<SyncRemoteDataSource>(
+  (ref) => ref.watch(supabaseRemoteDataSourceProvider),
+);
+
+final imageRemoteDataSourceProvider = Provider<ImageRemoteDataSource>(
+  (ref) => ref.watch(supabaseRemoteDataSourceProvider),
+);
+
+final shareRemoteDataSourceProvider = Provider<ShareRemoteDataSource>(
+  (ref) => ref.watch(supabaseRemoteDataSourceProvider),
+);
+
+final connectivityMonitorProvider = Provider<ConnectivityMonitor>(
+  (ref) => ConnectivityPlusMonitor(),
+);
+
+/// Shared repository plumbing. Watching it also creates (and starts) the
+/// sync engine, so using any repository activates sync triggers.
+final dataContextProvider = Provider<DataContext>((ref) {
+  ref.watch(syncEngineProvider);
+  final auth = ref.watch(authRepositoryProvider);
+  return DataContext(
+    db: ref.watch(localDatabaseProvider),
+    clock: ref.watch(clockProvider),
+    newId: ref.watch(idGeneratorProvider),
+    currentUserId: () => auth.currentUser?.id,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Service providers (features only depend on the interfaces).
+// ---------------------------------------------------------------------------
+
+final Provider<AuthRepository> authRepositoryProvider =
+    Provider<AuthRepository>(
+      (ref) => SupabaseAuthRepository(
+        ref.watch(supabaseClientProvider),
+        // Push pending changes before local data is wiped on sign-out.
+        beforeSignOut: () => ref.read(syncEngineProvider).sync(),
+      ),
+    );
+
 final subjectRepositoryProvider = Provider<SubjectRepository>(
-  (ref) => _unimplemented('SubjectRepository'),
+  (ref) => LocalSubjectRepository(ref.watch(dataContextProvider)),
 );
 
 final noteRepositoryProvider = Provider<NoteRepository>(
-  (ref) => _unimplemented('NoteRepository'),
+  (ref) => LocalNoteRepository(ref.watch(dataContextProvider)),
 );
 
 final quizRepositoryProvider = Provider<QuizRepository>(
-  (ref) => _unimplemented('QuizRepository'),
+  (ref) => LocalQuizRepository(ref.watch(dataContextProvider)),
 );
 
 final attemptRepositoryProvider = Provider<AttemptRepository>(
-  (ref) => _unimplemented('AttemptRepository'),
+  (ref) => LocalAttemptRepository(ref.watch(dataContextProvider)),
 );
 
-final shareRepositoryProvider = Provider<ShareRepository>(
-  (ref) => _unimplemented('ShareRepository'),
-);
+final shareRepositoryProvider = Provider<ShareRepository>((ref) {
+  final engine = ref.watch(syncEngineProvider);
+  final imageCopies = engine is DefaultSyncEngine
+      ? engine.imageCopies
+      : NoteImageCopyProcessor(
+          ref.watch(imageRemoteDataSourceProvider),
+          ref.watch(localDatabaseProvider).images,
+        );
+  return SupabaseShareRepository(
+    ctx: ref.watch(dataContextProvider),
+    remote: ref.watch(shareRemoteDataSourceProvider),
+    imageCopies: imageCopies,
+    connectivity: ref.watch(connectivityMonitorProvider),
+    sync: engine is DefaultSyncEngine ? engine.syncFresh : engine.sync,
+  );
+});
 
 final imageStoreProvider = Provider<ImageStore>(
-  (ref) => _unimplemented('ImageStore'),
+  (ref) => LocalImageStore(
+    ref.watch(dataContextProvider),
+    ref.watch(imageRemoteDataSourceProvider),
+  ),
 );
 
-final syncEngineProvider = Provider<SyncEngine>(
-  (ref) => _unimplemented('SyncEngine'),
-);
+/// The sync engine, created and started on first read (also by any
+/// repository). Lives for the app's lifetime.
+final Provider<SyncEngine> syncEngineProvider = Provider<SyncEngine>((ref) {
+  final auth = ref.watch(authRepositoryProvider);
+  final engine = DefaultSyncEngine(
+    db: ref.watch(localDatabaseProvider),
+    remote: ref.watch(syncRemoteDataSourceProvider),
+    imageRemote: ref.watch(imageRemoteDataSourceProvider),
+    currentUserId: () => auth.currentUser?.id,
+    userChanges: auth.authStateChanges().map((u) => u?.id),
+    connectivity: ref.watch(connectivityMonitorProvider),
+    foregroundChanges: appForegroundChanges(),
+    clock: ref.watch(clockProvider),
+  )..start();
+  ref.onDispose(() => unawaited(engine.dispose()));
+  return engine;
+});
 
 // ---------------------------------------------------------------------------
 // Auth state
