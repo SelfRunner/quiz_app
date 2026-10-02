@@ -9,12 +9,15 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
 import '../../../core/widgets/error_message.dart';
-import '../../../core/widgets/note_markdown.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../application/markdown_editing.dart';
+import '../application/note_ai_tools.dart';
+import '../application/note_document.dart';
 import '../application/note_image_picker.dart';
 import 'widgets/markdown_toolbar.dart';
+import 'widgets/note_ai_tools.dart';
+import 'widgets/rich_note_markdown.dart';
 
 /// Default title given to notes created from "New note".
 const String kUntitledNoteTitle = 'Untitled note';
@@ -57,6 +60,7 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
   Future<void>? _saving;
   bool _imageBusy = false;
   _EditorMode? _mode;
+  bool _focusMode = false;
 
   bool get _dirty =>
       _title.text != _savedTitle || _content.text != _savedContent;
@@ -294,6 +298,119 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
       marker,
       placeholder: placeholder,
     );
+    _contentFocus.requestFocus();
+  }
+
+  void _list(ListKind kind) {
+    _content.value = MarkdownEditing.toggleList(_content.value, kind);
+    _contentFocus.requestFocus();
+  }
+
+  /// Tab / Shift+Tab indent list items; elsewhere Tab keeps its default.
+  KeyEventResult _onEditorKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.tab) {
+      return KeyEventResult.ignored;
+    }
+    final keys = HardwareKeyboard.instance;
+    if (keys.isControlPressed || keys.isMetaPressed || keys.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    final next = MarkdownEditing.indentList(
+      _content.value,
+      outdent: keys.isShiftPressed,
+    );
+    if (next == null) return KeyEventResult.ignored;
+    _content.value = next;
+    return KeyEventResult.handled;
+  }
+
+  void _toggleFocusMode() {
+    setState(() => _focusMode = !_focusMode);
+    _contentFocus.requestFocus();
+  }
+
+  void _toggleTaskInEditor(int index, bool checked) {
+    final updated = NoteDocument.setTask(
+      _content.text,
+      index,
+      checked: checked,
+    );
+    if (updated == null) return;
+    final selection = _content.selection;
+    _content.value = TextEditingValue(
+      text: updated,
+      selection: selection.isValid && selection.end <= updated.length
+          ? selection
+          : TextSelection.collapsed(offset: updated.length),
+    );
+  }
+
+  NoteAiHost _aiHost(Note note) => NoteAiHost(
+    currentMarkdown: () => _content.text,
+    title: _title.text.trim().isEmpty ? note.title : _title.text.trim(),
+    subjectId: note.subjectId,
+    onReplace: (markdown) async {
+      _content.value = TextEditingValue(
+        text: markdown,
+        selection: TextSelection.collapsed(offset: markdown.length),
+      );
+      if (mounted) showAppSnackBar(context, 'Note content replaced');
+    },
+    onInsertBelow: (markdown) async {
+      final text = appendMarkdown(_content.text, markdown);
+      _content.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      if (mounted) showAppSnackBar(context, 'Inserted below');
+    },
+  );
+
+  Map<ShortcutActivator, VoidCallback> get _shortcuts {
+    final bindings = <ShortcutActivator, VoidCallback>{};
+    void both(
+      LogicalKeyboardKey key,
+      VoidCallback action, {
+      bool shift = false,
+    }) {
+      bindings[SingleActivator(key, control: true, shift: shift)] = action;
+      bindings[SingleActivator(key, meta: true, shift: shift)] = action;
+    }
+
+    both(
+      LogicalKeyboardKey.keyS,
+      () => unawaited(_save(showConfirmation: true)),
+    );
+    both(LogicalKeyboardKey.keyB, () => _wrap('**', 'bold'));
+    both(LogicalKeyboardKey.keyI, () => _wrap('_', 'italic'));
+    both(LogicalKeyboardKey.keyE, () => _wrap('`', 'code'));
+    both(LogicalKeyboardKey.keyK, () => unawaited(_insertLink()));
+    // Shift+digit may report the shifted character on some layouts.
+    for (final (keys, kind) in [
+      (
+        [LogicalKeyboardKey.digit7, LogicalKeyboardKey.ampersand],
+        ListKind.numbered,
+      ),
+      (
+        [LogicalKeyboardKey.digit8, LogicalKeyboardKey.asterisk],
+        ListKind.bullet,
+      ),
+      (
+        [LogicalKeyboardKey.digit9, LogicalKeyboardKey.parenthesisLeft],
+        ListKind.task,
+      ),
+    ]) {
+      for (final key in keys) {
+        both(key, () => _list(kind), shift: true);
+      }
+    }
+    both(LogicalKeyboardKey.keyF, _toggleFocusMode, shift: true);
+    if (_focusMode) {
+      bindings[const SingleActivator(LogicalKeyboardKey.escape)] =
+          _toggleFocusMode;
+    }
+    return bindings;
   }
 
   @override
@@ -326,17 +443,43 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
       );
     }
 
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final wide = Breakpoints.isExpanded(context);
-    final mode = _mode ?? (wide ? _EditorMode.split : _EditorMode.write);
+    final canFocusMode = Breakpoints.isMedium(context);
+    final focusMode = _focusMode && canFocusMode;
+    final mode = focusMode
+        ? _EditorMode.write
+        : (_mode ?? (wide ? _EditorMode.split : _EditorMode.write));
     final effectiveMode = !wide && mode == _EditorMode.split
         ? _EditorMode.write
         : mode;
 
-    final colors = AppColors.of(context);
     final hairline = Divider(height: 1, color: colors.hairline);
     final split = effectiveMode == _EditorMode.split;
     // Single-pane modes keep a readable line length; split uses the width.
-    Widget pane(Widget child) => split ? child : ContentContainer(child: child);
+    Widget pane(Widget child) => split
+        ? child
+        : ContentContainer(
+            maxWidth: focusMode ? 760 : ContentWidth.readable,
+            child: child,
+          );
+
+    final focusToggle = canFocusMode
+        ? IconButton(
+            key: const Key('note-focus-mode'),
+            tooltip: focusMode
+                ? 'Exit focus mode (Esc)'
+                : 'Focus mode (${shortcutLabel('F', shift: true)})',
+            icon: Icon(
+              focusMode ? Icons.fullscreen_exit : Icons.fullscreen,
+              size: 18,
+            ),
+            color: colors.mutedText,
+            visualDensity: VisualDensity.compact,
+            onPressed: _toggleFocusMode,
+          )
+        : null;
 
     final toolbar = MarkdownToolbar(
       controller: _content,
@@ -344,38 +487,67 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
       onInsertLink: _insertLink,
       onInsertImage: _insertImage,
       imageBusy: _imageBusy,
+      trailing: [
+        if (focusToggle != null) ...[const _ToolbarGap(), focusToggle],
+      ],
+    );
+
+    final stats = ListenableBuilder(
+      listenable: _content,
+      builder: (context, _) => Text(
+        NoteDocument.statsLabel(_content.text),
+        key: const Key('note-word-count'),
+        style: theme.textTheme.labelSmall?.copyWith(color: colors.faintText),
+      ),
     );
 
     final editor = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: TextField(
-            key: const Key('note-content'),
-            controller: _content,
-            focusNode: _contentFocus,
-            expands: true,
-            maxLines: null,
-            minLines: null,
-            keyboardType: TextInputType.multiline,
-            textAlignVertical: TextAlignVertical.top,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              fontFamily: 'monospace',
-              fontSize: 14.5,
-              height: 1.6,
-            ),
-            decoration: InputDecoration(
-              hintText: 'Write in Markdown… e.g. ## Heading, **bold**, - list',
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              filled: false,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: split ? Insets.lg : 0,
-                vertical: Insets.lg,
+          child: Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            onKeyEvent: _onEditorKey,
+            child: TextField(
+              key: const Key('note-content'),
+              controller: _content,
+              focusNode: _contentFocus,
+              expands: true,
+              maxLines: null,
+              minLines: null,
+              keyboardType: TextInputType.multiline,
+              textAlignVertical: TextAlignVertical.top,
+              inputFormatters: const [ListContinuationFormatter()],
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontFamily: focusMode ? null : 'monospace',
+                fontSize: focusMode ? 17 : 14.5,
+                height: focusMode ? 1.75 : 1.6,
+              ),
+              decoration: InputDecoration(
+                hintText:
+                    'Write in Markdown… e.g. ## Heading, **bold**, - list, '
+                    r'$x^2$',
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: split ? Insets.lg : 0,
+                  vertical: focusMode ? Insets.xxl : Insets.lg,
+                ),
               ),
             ),
           ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            split ? Insets.lg : 0,
+            Insets.xs,
+            split ? Insets.lg : 0,
+            Insets.sm,
+          ),
+          child: stats,
         ),
       ],
     );
@@ -394,7 +566,10 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
                 horizontal: split ? Insets.xl : 0,
                 vertical: Insets.lg,
               ),
-              child: NoteMarkdown(data: _content.text),
+              child: RichNoteMarkdown(
+                data: _content.text,
+                onToggleTask: _toggleTaskInEditor,
+              ),
             ),
     );
 
@@ -413,124 +588,151 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
       ),
     };
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) unawaited(_handleBack());
-      },
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
-              unawaited(_save(showConfirmation: true)),
-          const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
-              unawaited(_save(showConfirmation: true)),
-          const SingleActivator(LogicalKeyboardKey.keyB, control: true): () =>
-              _wrap('**', 'bold'),
-          const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
-              _wrap('_', 'italic'),
-          const SingleActivator(LogicalKeyboardKey.keyB, meta: true): () =>
-              _wrap('**', 'bold'),
-          const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
-              _wrap('_', 'italic'),
-          const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
-              unawaited(_insertLink()),
-          const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
-              unawaited(_insertLink()),
-        },
-        child: Scaffold(
-          appBar: AppBar(
-            leading: BackButton(onPressed: () => unawaited(_handleBack())),
-            title: const Text('Edit note'),
-            actions: [
-              _SaveIndicator(state: _saveState),
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: SegmentedButton<_EditorMode>(
-                  showSelectedIcon: false,
-                  style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  segments: [
-                    const ButtonSegment(
-                      value: _EditorMode.write,
-                      icon: Icon(Icons.edit_outlined),
-                      tooltip: 'Write',
-                    ),
-                    if (wide)
-                      const ButtonSegment(
-                        value: _EditorMode.split,
-                        icon: Icon(Icons.vertical_split_outlined),
-                        tooltip: 'Split view',
-                      ),
-                    const ButtonSegment(
-                      value: _EditorMode.preview,
-                      icon: Icon(Icons.visibility_outlined),
-                      tooltip: 'Preview',
-                    ),
-                  ],
-                  selected: {effectiveMode},
-                  onSelectionChanged: (s) => setState(() => _mode = s.first),
-                ),
-              ),
-              IconButton(
-                key: const Key('note-save'),
-                tooltip: 'Save (Ctrl+S)',
-                icon: const Icon(Icons.save_outlined),
-                onPressed: _saveState == _SaveState.saving
-                    ? null
-                    : () => unawaited(_save(showConfirmation: true)),
-              ),
-              const SizedBox(width: 4),
-            ],
-          ),
-          body: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    final Widget scaffold;
+    if (focusMode) {
+      scaffold = Scaffold(
+        key: const Key('note-focus-scaffold'),
+        body: SafeArea(
+          child: Stack(
             children: [
-              ContentContainer(
-                maxWidth: split ? double.infinity : ContentWidth.readable,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+              Positioned.fill(child: body),
+              Positioned(
+                top: Insets.sm,
+                right: Insets.md,
+                child: Row(
                   children: [
-                    TextField(
-                      key: const Key('note-title'),
-                      controller: _title,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                      textCapitalization: TextCapitalization.sentences,
-                      textInputAction: TextInputAction.next,
-                      onSubmitted: (_) => _contentFocus.requestFocus(),
-                      onTap: () {
-                        // Select the placeholder title for quick replacement.
-                        if (_title.text == kUntitledNoteTitle) {
-                          _title.selection = TextSelection(
-                            baseOffset: 0,
-                            extentOffset: _title.text.length,
-                          );
-                        }
-                      },
-                      decoration: const InputDecoration(
-                        hintText: 'Title',
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        filled: false,
-                        contentPadding: EdgeInsets.symmetric(
-                          vertical: Insets.md,
-                        ),
-                      ),
+                    _SaveIndicator(state: _saveState),
+                    Gaps.w8,
+                    TextButton.icon(
+                      key: const Key('note-exit-focus'),
+                      onPressed: _toggleFocusMode,
+                      icon: const Icon(Icons.fullscreen_exit, size: 18),
+                      label: const Text('Exit focus'),
                     ),
-                    if (effectiveMode != _EditorMode.preview) toolbar,
                   ],
                 ),
               ),
-              hairline,
-              Expanded(child: body),
             ],
           ),
         ),
-      ),
+      );
+    } else {
+      scaffold = Scaffold(
+        appBar: AppBar(
+          leading: BackButton(onPressed: () => unawaited(_handleBack())),
+          title: const Text('Edit note'),
+          actions: [
+            _SaveIndicator(state: _saveState),
+            const SizedBox(width: 8),
+            NoteAiMenuButton(host: _aiHost(note)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: SegmentedButton<_EditorMode>(
+                showSelectedIcon: false,
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: [
+                  const ButtonSegment(
+                    value: _EditorMode.write,
+                    icon: Icon(Icons.edit_outlined),
+                    tooltip: 'Write',
+                  ),
+                  if (wide)
+                    const ButtonSegment(
+                      value: _EditorMode.split,
+                      icon: Icon(Icons.vertical_split_outlined),
+                      tooltip: 'Split view',
+                    ),
+                  const ButtonSegment(
+                    value: _EditorMode.preview,
+                    icon: Icon(Icons.visibility_outlined),
+                    tooltip: 'Preview',
+                  ),
+                ],
+                selected: {effectiveMode},
+                onSelectionChanged: (s) => setState(() => _mode = s.first),
+              ),
+            ),
+            IconButton(
+              key: const Key('note-save'),
+              tooltip: 'Save (${shortcutLabel('S')})',
+              icon: const Icon(Icons.save_outlined),
+              onPressed: _saveState == _SaveState.saving
+                  ? null
+                  : () => unawaited(_save(showConfirmation: true)),
+            ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ContentContainer(
+              maxWidth: split ? double.infinity : ContentWidth.readable,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    key: const Key('note-title'),
+                    controller: _title,
+                    style: theme.textTheme.headlineSmall,
+                    textCapitalization: TextCapitalization.sentences,
+                    textInputAction: TextInputAction.next,
+                    onSubmitted: (_) => _contentFocus.requestFocus(),
+                    onTap: () {
+                      // Select the placeholder title for quick replacement.
+                      if (_title.text == kUntitledNoteTitle) {
+                        _title.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: _title.text.length,
+                        );
+                      }
+                    },
+                    decoration: const InputDecoration(
+                      hintText: 'Title',
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
+                      contentPadding: EdgeInsets.symmetric(vertical: Insets.md),
+                    ),
+                  ),
+                  if (effectiveMode != _EditorMode.preview) toolbar,
+                ],
+              ),
+            ),
+            hairline,
+            Expanded(child: body),
+          ],
+        ),
+      );
+    }
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (focusMode) {
+          _toggleFocusMode();
+        } else {
+          unawaited(_handleBack());
+        }
+      },
+      child: CallbackShortcuts(bindings: _shortcuts, child: scaffold),
     );
   }
+}
+
+class _ToolbarGap extends StatelessWidget {
+  const _ToolbarGap();
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 18,
+    child: VerticalDivider(
+      width: Insets.md,
+      color: AppColors.of(context).border,
+    ),
+  );
 }
 
 class _SaveIndicator extends StatelessWidget {
