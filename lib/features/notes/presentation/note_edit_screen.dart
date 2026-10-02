@@ -9,8 +9,10 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
 import '../../../core/widgets/error_message.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
+import '../../../data/repositories/organization_repository.dart';
 import '../application/markdown_editing.dart';
 import '../application/note_ai_tools.dart';
 import '../application/note_document.dart';
@@ -140,9 +142,18 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
     final completer = Completer<void>();
     _saving = completer.future;
     try {
-      final saved = await ref
-          .read(noteRepositoryProvider)
-          .update(note.copyWith(title: title, contentMd: content));
+      final repo = ref.read(noteRepositoryProvider);
+      // Tags / pin may have changed elsewhere (tag dialog, another screen):
+      // keep the stored values instead of the ones loaded with the editor.
+      final latest = await repo.getById(note.id);
+      final saved = await repo.update(
+        note.copyWith(
+          title: title,
+          contentMd: content,
+          tags: latest?.tags ?? note.tags,
+          pinned: latest?.pinned ?? note.pinned,
+        ),
+      );
       _note = saved;
       _savedTitle = snapshotTitle;
       _savedContent = content;
@@ -446,6 +457,43 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
     final theme = Theme.of(context);
     final colors = AppColors.of(context);
     final wide = Breakpoints.isExpanded(context);
+    final tags = ref.watch(noteProvider(note.id)).value?.tags ?? note.tags;
+    void editTags() => unawaited(
+      editItemTags(
+        context,
+        ref,
+        kind: TaggableKind.note,
+        id: note.id,
+        tags: tags,
+      ),
+    );
+    final tagRow = Padding(
+      padding: const EdgeInsets.only(bottom: Insets.sm),
+      child: Wrap(
+        key: const Key('note-editor-tags'),
+        spacing: Insets.xs,
+        runSpacing: Insets.xs,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          TagChips(tags: tags, dense: true, onTap: (_) => editTags()),
+          TextButton.icon(
+            key: const Key('note-editor-tags-button'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 26),
+              visualDensity: VisualDensity.compact,
+              foregroundColor: colors.mutedText,
+              textStyle: theme.textTheme.labelMedium,
+            ),
+            onPressed: editTags,
+            icon: Icon(
+              tags.isEmpty ? Icons.sell_outlined : Icons.edit_outlined,
+              size: 14,
+            ),
+            label: Text(tags.isEmpty ? 'Add tags' : 'Edit tags'),
+          ),
+        ],
+      ),
+    );
     final canFocusMode = Breakpoints.isMedium(context);
     final focusMode = _focusMode && canFocusMode;
     final mode = focusMode
@@ -696,6 +744,7 @@ class _NoteEditScreenState extends ConsumerState<NoteEditScreen> {
                       contentPadding: EdgeInsets.symmetric(vertical: Insets.md),
                     ),
                   ),
+                  tagRow,
                   if (effectiveMode != _EditorMode.preview) toolbar,
                 ],
               ),
