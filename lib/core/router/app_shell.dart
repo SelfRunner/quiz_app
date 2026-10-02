@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -8,6 +9,9 @@ import '../../data/data_providers.dart';
 import '../../data/sync/default_sync_engine.dart';
 import '../../data/sync/sync_engine.dart';
 import '../../features/auth/application/sign_out.dart';
+import '../../features/search/presentation/search_screen.dart';
+import '../../features/search/widgets/quick_search.dart';
+import '../../features/search/widgets/search_entry.dart';
 import '../theme/app_colors.dart';
 import '../theme/tokens.dart';
 import '../widgets/error_message.dart';
@@ -19,7 +23,9 @@ import 'routes.dart';
 /// shows a badge with today's due cards). Bottom bar on narrow
 /// screens; on wide screens a sidebar-style rail (app mark, destinations,
 /// sync status and sign-out at the bottom) that extends with labels from the
-/// expanded breakpoint. Also
+/// expanded breakpoint. Search: a sidebar entry and Ctrl/Cmd+K (anywhere
+/// while the shell is mounted, also over pushed routes) open the
+/// quick-search palette; phone app bars use `SearchIconButton`. Also
 /// surfaces sync problems: an offline/error strip on narrow screens and a
 /// snackbar when the server rejects a change.
 class AppShell extends ConsumerStatefulWidget {
@@ -84,6 +90,16 @@ class _AppShellState extends ConsumerState<AppShell> {
   void initState() {
     super.initState();
     _listenToRejections();
+    HardwareKeyboard.instance.addHandler(_onKey);
+  }
+
+  /// Ctrl/Cmd+K: focuses an open search screen, else opens the palette.
+  bool _onKey(KeyEvent event) {
+    if (!mounted || !isQuickSearchShortcut(event)) return false;
+    if (SearchScreen.focusIfCurrent?.call() ?? false) return true;
+    if (QuickSearchDialog.isOpen) return true;
+    showQuickSearch(context);
+    return true;
   }
 
   void _listenToRejections() {
@@ -107,6 +123,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
     unawaited(_rejections?.cancel());
     super.dispose();
   }
@@ -136,7 +153,15 @@ class _AppShellState extends ConsumerState<AppShell> {
               trailingAtBottom: true,
               leading: SizedBox(
                 width: railWidth,
-                child: _Brand(extended: extended),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _Brand(extended: extended),
+                    Gaps.h4,
+                    SidebarSearchButton(extended: extended),
+                    Gaps.h8,
+                  ],
+                ),
               ),
               trailing: SizedBox(
                 width: railWidth,

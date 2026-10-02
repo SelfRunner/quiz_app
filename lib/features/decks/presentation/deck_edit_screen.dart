@@ -6,16 +6,19 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/deck.dart';
 import '../../../data/models/syncable.dart';
+import '../application/deck_io_actions.dart';
 import '../domain/deck_format.dart';
 import '../widgets/card_list_editor.dart';
 
 enum _LeaveChoice { save, discard }
 
-/// Owner-only deck editor: title, description and the cards (front, back,
-/// optional hint) with add / bulk add / reorder / duplicate / delete.
+/// Owner-only deck editor: title, description, tags and the cards (front,
+/// back, optional hint) with add / bulk add / import (CSV / Anki TSV) /
+/// reorder / duplicate / delete.
 class DeckEditScreen extends ConsumerStatefulWidget {
   const DeckEditScreen({super.key, required this.deckId});
 
@@ -30,6 +33,7 @@ class _DeckEditScreenState extends ConsumerState<DeckEditScreen> {
   final _description = TextEditingController();
   Deck? _original;
   List<Flashcard> _cards = [];
+  List<String> _tags = [];
   bool _dirty = false;
   bool _saving = false;
   bool _showIssues = false;
@@ -47,6 +51,33 @@ class _DeckEditScreenState extends ConsumerState<DeckEditScreen> {
     _title.text = deck.title;
     _description.text = deck.description ?? '';
     _cards = [...deck.cards];
+    _tags = [...deck.tags];
+  }
+
+  /// Appends cards from a CSV / Anki file (after the preview); saved with
+  /// the rest of the edits.
+  Future<void> _import() async {
+    final picked = await pickDeckImport(
+      context,
+      ref,
+      target: _title.text.trim().isEmpty ? null : _title.text.trim(),
+    );
+    if (picked == null || !mounted) return;
+    final used = {for (final c in _cards) c.id};
+    final newId = ref.read(idGeneratorProvider);
+    final added = <Flashcard>[];
+    for (final c in picked.result.items) {
+      var card = c;
+      while (!used.add(card.id)) {
+        card = card.copyWith(id: newId());
+      }
+      added.add(card);
+    }
+    setState(() {
+      _cards = [..._cards.where((c) => !isBlankCard(c)), ...added];
+      _dirty = true;
+    });
+    showSnack(context, 'Added ${plural(added.length, 'card')} — save to keep');
   }
 
   void _markDirty() {
@@ -85,12 +116,14 @@ class _DeckEditScreenState extends ConsumerState<DeckEditScreen> {
               title: title,
               description: description.isEmpty ? null : description,
               cards: cards,
+              tags: _tags,
             ),
           );
       if (!mounted) return true;
       setState(() {
         _original = saved;
         _cards = [...saved.cards];
+        _tags = [...saved.tags];
         _dirty = false;
         _showIssues = false;
       });
@@ -194,6 +227,13 @@ class _DeckEditScreenState extends ConsumerState<DeckEditScreen> {
             title: const Text('Edit deck'),
             actions: [
               if (canEdit)
+                IconButton(
+                  key: const Key('deck-edit-import'),
+                  tooltip: 'Import cards (CSV / Anki)',
+                  icon: const Icon(Icons.upload_file_outlined),
+                  onPressed: _saving ? null : _import,
+                ),
+              if (canEdit)
                 Padding(
                   padding: const EdgeInsets.only(right: Insets.md),
                   child: FilledButton.icon(
@@ -248,6 +288,15 @@ class _DeckEditScreenState extends ConsumerState<DeckEditScreen> {
             labelText: 'Description (optional)',
           ),
           onChanged: (_) => _markDirty(),
+        ),
+        Gaps.h12,
+        TagEditor(
+          key: const Key('deck-tags'),
+          tags: _tags,
+          onChanged: (tags) => setState(() {
+            _tags = tags;
+            _dirty = true;
+          }),
         ),
         SectionHeader(
           key: const Key('cards-header'),

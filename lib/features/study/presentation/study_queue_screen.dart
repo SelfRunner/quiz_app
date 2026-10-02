@@ -11,6 +11,7 @@ import '../../../study/study_settings.dart';
 import '../../decks/domain/deck_format.dart';
 import '../../decks/domain/queue_groups.dart';
 import '../../decks/widgets/review_session.dart';
+import '../../search/widgets/search_entry.dart';
 
 /// "Due today" across every readable deck (own + shared), grouped by
 /// subject and deck, with "Study all" running one [ReviewSession] over the
@@ -64,6 +65,7 @@ class _StudyQueueScreenState extends ConsumerState<StudyQueueScreen> {
       appBar: AppBar(
         title: const Text('Study'),
         actions: [
+          const SearchIconButton(),
           IconButton(
             key: const Key('study-limits'),
             tooltip: 'Daily new-card limit',

@@ -1015,7 +1015,8 @@ class names/constructors, so `app_router.dart` needs no edits.
 | UI: quizzes + AI generate | `lib/features/{quizzes,ai_generate}/` |
 | UI: sharing | `lib/features/sharing/` (share sheet widget usable from subject/note/quiz screens) |
 
-Shared widgets used by several features go in `lib/core/widgets/`. Feature
+Shared widgets used by several features go in `lib/core/widgets/`
+(file save / open helpers in `lib/core/utils/`; `lib/features/subjects/application/file_saver.dart` re-exports the saver). Feature
 code may only depend on interfaces + providers listed above.
 
 ## Data layer notes (Phase 1B, implemented)
@@ -1667,3 +1668,66 @@ Routes: `AppRoutes.chats` `/chats` (`ChatsScreen`), `chat(id)` `/chats/:id`
 | `ChatLauncherButton(scopeType:, scopeId?, title:, compact)` | `lib/features/chat/widgets/chat_launcher.dart` | chat |
 | `ChatsScreen`, `ChatScreen` | `lib/features/chat/presentation/` | chat |
 | `SearchScreen` | `lib/features/search/presentation/` | search |
+| `SearchIconButton()` / `openSearch(context)` / `showQuickSearch(context)` | `lib/features/search/widgets/search_entry.dart`, `quick_search.dart` | search |
+| `TagChips`, `TagEditor`, `showTagEditorDialog`, `editItemTags`, `tagSearchQuery`, `openTagSearch` | `lib/core/widgets/tag_widgets.dart` | shared |
+| `PinButton(.item / .subject)` | `lib/core/widgets/pin_button.dart` | shared |
+| `ExportMenu`, `ExportItem`, `runExport` | `lib/core/widgets/export_menu.dart` | shared |
+| `FileSaver` / `fileSaverProvider`, `mimeTypeFor` | `lib/core/utils/file_saver.dart` | shared |
+| `FileOpener` / `fileOpenerProvider` (`OpenedFile{name, bytes, text}`) | `lib/core/utils/file_opener.dart` | shared |
+
+**Search UI** (implemented). `SearchScreen(initialQuery)`: instant results
+from `searchProvider`, grouped by type (subjects, notes, quizzes, decks,
+files, chats; `groupSearchResults` in
+`lib/features/search/application/search_logic.dart`), highlighted title /
+snippet matches, filters (type chips, subject, tag), ↑ / ↓ moves the
+selection and Enter (the field's submit) opens it, recent searches
+(`recentSearchesProvider`, Hive `prefs` key `recent_searches`, max 8),
+idle / no-result states. Queries may carry `tag:x` / `tag:"x y"` tokens,
+which become tag filters, so `AppRoutes.searchFor(tagSearchQuery(tag))`
+opens search filtered by a tag. Results open: subject / note / quiz / deck
+/ chat by id; files open their subject. Global entry: the sidebar row
+("Search  Ctrl K") and **Ctrl/Cmd+K** (a `HardwareKeyboard` handler of
+`AppShell`, so it works over pushed routes too while the shell is in the
+stack) open the quick-search palette (`showQuickSearch`, top 3 per type,
+"Show all results" / Ctrl+Enter expands to `/search?q=`); on an open
+search screen Ctrl/Cmd+K focuses its field. Phone app bars of the shell
+tabs show `const SearchIconButton()` (renders nothing from 720px, where
+the sidebar has search); add it to other phone app bars as needed.
+Tests: override `searchProvider` (e.g. with a `SearchIndex`) and
+`organizationRepositoryProvider` (subject / tag filter lists).
+
+**Shared organization widgets** (import directly; not in the
+`design_system.dart` barrel):
+
+```dart
+// Read-only tags; tap -> search filtered by that tag (or onTap).
+TagChips(tags: note.tags, dense: true, maxVisible: 3)
+// Controlled editor: chips + autocomplete from tags in use (allTagsProvider,
+// or `suggestions:`) + "Create …"; Enter picks, comma adds; normalized.
+TagEditor(tags: _tags, onChanged: (t) => setState(() => _tags = t))
+// Dialog + OrganizationRepository.setTags (owner only), error snackbar:
+await editItemTags(context, ref, kind: TaggableKind.quiz, id: quiz.id, tags: quiz.tags);
+// Owner-only pin toggle (hide for shared items):
+PinButton.item(kind: TaggableKind.note, id: note.id, pinned: note.pinned)
+// Export formats; each item builds (fileName, bytes) when chosen and is
+// saved via fileSaverProvider (web: anchor download; Android/iOS: save
+// sheet; desktop: Downloads folder) with a snackbar:
+ExportMenu(items: [
+  ExportItem(label: 'Markdown (.md)', icon: Icons.description_outlined,
+      build: () async => ('${safeFileName(note.title)}.md',
+          Uint8List.fromList(utf8.encode(noteToMarkdown(note))))),
+])
+// From an existing menu: runExport(context, ref, item)
+// Imports: final file = await ref.read(fileOpenerProvider).pick(extensions: ['json', 'csv']);
+```
+
+Subjects list: pinned section first, sort (recent / name / created; pinned
+first), item menu Pin / Archive (undo) / Export as Markdown (.zip) /
+Edit / Delete, "Archived" view (`subjectsShowArchivedProvider`). Decks:
+pin + tags + export (CSV, Anki) + "Import cards" (CSV / Anki TSV, preview
+with every skipped row by line: `showDeckImportPreview` /
+`pickDeckImport` in `lib/features/decks/`) on the detail screen; tags and
+import in the editor; `DeckListSection` lists pinned decks first, shows
+tags and imports a file as a new deck. Dashboard recent notes skip
+archived subjects. Tests fake files with `fileSaverProvider` /
+`fileOpenerProvider` overrides (see `test/features/search/support/org_fakes.dart`).

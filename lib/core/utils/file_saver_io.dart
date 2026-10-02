@@ -1,18 +1,33 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../../../core/errors/app_exception.dart';
+import '../errors/app_exception.dart';
 
-/// Writes [bytes] to the Downloads folder (desktop) or the temporary folder,
-/// never overwriting an existing file. Returns the path.
+/// Android / iOS: the system save sheet (`file_picker`; null when the user
+/// cancels or the platform handled it). Desktop (or when the sheet is
+/// unavailable): writes [bytes] to the Downloads folder, else the temporary
+/// folder, never overwriting an existing file, and returns the path.
 Future<String?> saveFileBytes(
   String fileName,
   Uint8List bytes,
   String? mimeType,
 ) async {
+  if (Platform.isAndroid || Platform.isIOS) {
+    try {
+      final uri = await FilePicker.saveFile(
+        fileName: fileName,
+        bytes: bytes,
+        mimeType: mimeType ?? 'application/octet-stream',
+      );
+      return uri != null && uri.scheme == 'file' ? uri.toFilePath() : null;
+    } on Exception {
+      // Fall back to the app's folders below.
+    }
+  }
   try {
     Directory? dir;
     try {

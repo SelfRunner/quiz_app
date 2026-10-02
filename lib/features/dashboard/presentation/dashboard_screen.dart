@@ -8,6 +8,7 @@ import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../../study/stats.dart';
 import '../../../study/study_providers.dart';
+import '../../search/widgets/search_entry.dart';
 import '../application/dashboard_providers.dart';
 import '../widgets/dashboard_cards.dart';
 
@@ -25,7 +26,10 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final stats = ref.watch(dashboardStatsProvider);
     return ResponsiveScaffold(
-      appBar: AppBar(title: const Text('Home')),
+      appBar: AppBar(
+        title: const Text('Home'),
+        actions: const [SearchIconButton()],
+      ),
       maxWidth: ContentWidth.wide,
       scrollable: true,
       body: Column(
