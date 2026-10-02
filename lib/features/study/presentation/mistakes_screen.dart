@@ -8,6 +8,7 @@ import '../../../data/data_providers.dart';
 import '../../../data/models/subject.dart';
 import '../../../data/repositories/mistake_repository.dart';
 import '../../quizzes/presentation/mistakes_practice_screen.dart';
+import '../../quizzes/widgets/explain_answer.dart';
 import '../../quizzes/widgets/quiz_format.dart'
     show errorText, formatDate, plural, showSnack;
 import '../widgets/mistakes_history.dart';
@@ -330,6 +331,7 @@ class _QuizCard extends ConsumerWidget {
                 ].join(' · '),
               ),
               actions: [
+                ExplainButton(question: e.question, quiz: quiz, compact: true),
                 IconButton(
                   tooltip: 'I know this',
                   icon: const Icon(Icons.check),

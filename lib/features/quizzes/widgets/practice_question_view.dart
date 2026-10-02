@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../../core/widgets/design_system.dart' hide MaxWidth;
 import '../../../data/models/question.dart';
+import '../../../data/models/quiz.dart';
+import '../application/ai_grading.dart';
 import '../domain/quiz_session.dart';
+import 'ai_grading_widgets.dart';
+import 'explain_answer.dart';
+import 'quiz_format.dart';
 
 /// Hint above a question prompt.
 String questionHint(QuestionType t, {bool exam = false}) => switch (t) {
@@ -29,6 +34,10 @@ class PracticeQuestionView extends StatelessWidget {
     required this.onTextChanged,
     required this.onPrimary,
     required this.onSelfGrade,
+    this.aiGrade,
+    this.onAcceptAiGrade,
+    this.onSkipAiGrade,
+    this.quiz,
   });
 
   final QuizSession session;
@@ -36,7 +45,19 @@ class PracticeQuestionView extends StatelessWidget {
   final ValueChanged<int> onToggle;
   final ValueChanged<String> onTextChanged;
   final VoidCallback onPrimary;
+
+  /// Self-grade, or an override of the AI grade ("Mark right/wrong").
   final ValueChanged<bool> onSelfGrade;
+
+  /// AI grading of the current short answer (null = self-graded).
+  final AiGradeState? aiGrade;
+  final VoidCallback? onAcceptAiGrade;
+
+  /// "Grade myself" while the AI is still grading.
+  final VoidCallback? onSkipAiGrade;
+
+  /// Quiz of the current question (its notes ground "Explain").
+  final Quiz? quiz;
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +87,10 @@ class PracticeQuestionView extends StatelessWidget {
               children: [
                 Icon(Icons.check, size: 14, color: colors.success),
                 Gaps.w4,
-                Text('${s.correctCount} / ${s.answeredCount}', style: mono),
+                Text(
+                  '${formatPoints(s.credit)} / ${s.answeredCount}',
+                  style: mono,
+                ),
               ],
             ),
           ),
@@ -137,22 +161,57 @@ class PracticeQuestionView extends StatelessWidget {
           ),
         ]);
       }
+      final ai = aiGrade;
+      if (revealed && ai != null) {
+        content.add(Gaps.h12);
+        if (ai.loading) {
+          content.add(const AiGradingIndicator());
+        } else if (ai.grade case final grade?) {
+          content.add(
+            AiVerdictBanner(grade: grade, note: decisionNote(ai.decision)),
+          );
+        } else if (ai.error != null) {
+          content.add(
+            InfoBanner(
+              key: const Key('ai-grade-error'),
+              kind: InfoBannerKind.warning,
+              message:
+                  'AI grading failed: ${ai.error} Grade your answer yourself.',
+            ),
+          );
+        }
+      }
     }
 
     final explanation = q.explanation?.trim();
     if (checked) {
       final ok = grade ?? false;
+      final partial = s.isPartial(item.id);
       final hasExplanation = explanation != null && explanation.isNotEmpty;
+      final status = ok
+          ? 'Correct!'
+          : (partial ? 'Partly correct' : 'Not quite');
       content.addAll([
         Gaps.h16,
         InfoBanner(
           key: const Key('answer-feedback'),
-          kind: ok ? InfoBannerKind.success : InfoBannerKind.error,
-          icon: ok ? Icons.check_circle_outline : Icons.highlight_off,
-          title: hasExplanation ? (ok ? 'Correct!' : 'Not quite') : null,
-          message: hasExplanation
-              ? explanation
-              : (ok ? 'Correct!' : 'Not quite'),
+          kind: ok
+              ? InfoBannerKind.success
+              : (partial ? InfoBannerKind.warning : InfoBannerKind.error),
+          icon: ok
+              ? Icons.check_circle_outline
+              : (partial ? Icons.adjust : Icons.highlight_off),
+          title: hasExplanation ? status : null,
+          message: hasExplanation ? explanation : status,
+        ),
+        Gaps.h8,
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: ExplainButton(
+            question: q,
+            answer: s.answerFor(item.id),
+            quiz: quiz,
+          ),
         ),
       ]);
     } else if (revealed && explanation != null && explanation.isNotEmpty) {
@@ -167,8 +226,71 @@ class PracticeQuestionView extends StatelessWidget {
 
     final selfGrading = !q.type.hasOptions && revealed && !checked;
     final buttonSize = wide ? const Size(160, 44) : const Size.fromHeight(48);
+    final ai = selfGrading ? aiGrade : null;
+    final aiLoading = ai != null && ai.loading;
+    final aiVerdict = ai != null && ai.hasVerdict;
     final Widget actions;
-    if (selfGrading) {
+    if (aiLoading) {
+      final skip = TextButton(
+        key: const Key('ai-grade-skip'),
+        onPressed: onSkipAiGrade,
+        child: const Text('Grade myself'),
+      );
+      final busy = FilledButton(
+        style: FilledButton.styleFrom(minimumSize: buttonSize),
+        onPressed: null,
+        child: const Text('Grading…'),
+      );
+      actions = wide
+          ? Row(mainAxisSize: MainAxisSize.min, children: [skip, Gaps.w8, busy])
+          : Row(
+              children: [
+                Expanded(child: skip),
+                Gaps.w12,
+                Expanded(child: busy),
+              ],
+            );
+    } else if (aiVerdict) {
+      final small = wide ? const Size(0, 44) : const Size.fromHeight(48);
+      final wrong = OutlinedButton(
+        key: const Key('ai-grade-wrong'),
+        style: OutlinedButton.styleFrom(
+          minimumSize: small,
+          foregroundColor: colors.danger,
+        ),
+        onPressed: () => onSelfGrade(false),
+        child: const Text('Mark wrong'),
+      );
+      final right = OutlinedButton(
+        key: const Key('ai-grade-right'),
+        style: OutlinedButton.styleFrom(
+          minimumSize: small,
+          foregroundColor: colors.success,
+        ),
+        onPressed: () => onSelfGrade(true),
+        child: const Text('Mark right'),
+      );
+      final accept = FilledButton(
+        key: const Key('ai-grade-accept'),
+        style: FilledButton.styleFrom(minimumSize: small),
+        onPressed: onAcceptAiGrade,
+        child: const Text('Accept'),
+      );
+      actions = wide
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [wrong, Gaps.w8, right, Gaps.w8, accept],
+            )
+          : Row(
+              children: [
+                Expanded(child: wrong),
+                Gaps.w8,
+                Expanded(child: right),
+                Gaps.w8,
+                Expanded(child: accept),
+              ],
+            );
+    } else if (selfGrading) {
       final missed = OutlinedButton.icon(
         style: OutlinedButton.styleFrom(
           minimumSize: buttonSize,
@@ -224,7 +346,11 @@ class PracticeQuestionView extends StatelessWidget {
             ],
             label: 'Pick',
           ),
-        if (selfGrading)
+        if (aiVerdict)
+          const KeyboardShortcutHint(keys: ['Enter'], label: 'Accept')
+        else if (aiLoading)
+          const SizedBox.shrink()
+        else if (selfGrading)
           const KeyboardShortcutHint(keys: ['Y', 'N'], label: 'Got it / missed')
         else
           KeyboardShortcutHint(
