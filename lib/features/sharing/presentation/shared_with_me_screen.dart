@@ -10,6 +10,7 @@ import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../../data/sync/sync_engine.dart';
+import '../../search/widgets/search_entry.dart';
 import '../sharing_ui.dart';
 import '../widgets/shared_by_chip.dart';
 
@@ -134,6 +135,7 @@ class _SharedWithMeScreenState extends ConsumerState<SharedWithMeScreen> {
       appBar: AppBar(
         title: const Text('Shared with me'),
         actions: [
+          const SearchIconButton(),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _refreshing

@@ -4,13 +4,24 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/deck.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../application/deck_io_actions.dart';
 import '../domain/deck_format.dart';
 
+/// [decks] with pinned ones first (each group keeps its order).
+List<Deck> pinnedFirst(List<Deck> decks) => [
+  for (final d in decks)
+    if (d.pinned) d,
+  for (final d in decks)
+    if (!d.pinned) d,
+];
+
 /// Lists flashcard decks of a subject (when [noteId] is null: subject-level
-/// decks) or of a note, with open / new / AI-generate / study actions.
+/// decks) or of a note, pinned first, with open / new / import (CSV / Anki)
+/// / AI-generate / study actions.
 ///
 /// Cross-feature entry point: subject and note screens embed this; the decks
 /// feature owns the implementation. Renders as a non-scrolling column, so
@@ -66,16 +77,18 @@ class _DeckListSectionState extends ConsumerState<DeckListSection> {
   @override
   Widget build(BuildContext context) {
     final noteId = widget.noteId;
-    final decks = noteId == null
-        ? ref
-              .watch(decksBySubjectProvider(widget.subjectId))
-              .whenData(
-                (l) => [
-                  for (final d in l)
-                    if (d.noteId == null) d,
-                ],
-              )
-        : ref.watch(decksByNoteProvider(noteId));
+    final decks =
+        (noteId == null
+                ? ref
+                      .watch(decksBySubjectProvider(widget.subjectId))
+                      .whenData(
+                        (l) => [
+                          for (final d in l)
+                            if (d.noteId == null) d,
+                        ],
+                      )
+                : ref.watch(decksByNoteProvider(noteId)))
+            .whenData(pinnedFirst);
 
     final actions = widget.readOnly
         ? null
@@ -88,6 +101,17 @@ class _DeckListSectionState extends ConsumerState<DeckListSection> {
                 icon: const Icon(Icons.auto_awesome_outlined, size: 18),
                 label: const Text('Generate with AI'),
               ),
+            ),
+            TextButton.icon(
+              key: const Key('deck-import'),
+              onPressed: () => importNewDeck(
+                context,
+                ref,
+                subjectId: widget.subjectId,
+                noteId: widget.noteId,
+              ),
+              icon: const Icon(Icons.upload_file_outlined, size: 18),
+              label: const Text('Import'),
             ),
             TextButton.icon(
               key: const Key('deck-new'),
@@ -183,8 +207,38 @@ class _DeckTile extends ConsumerWidget {
           aiMade ? Icons.auto_awesome_outlined : Icons.style_outlined,
         ),
       ),
-      title: Text(deck.title),
-      subtitle: Text(parts.join(' · ')),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              deck.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (deck.pinned)
+            Padding(
+              padding: const EdgeInsets.only(left: Insets.xs),
+              child: Icon(
+                Icons.push_pin,
+                key: ValueKey('deck-pinned-${deck.id}'),
+                size: 14,
+                color: AppColors.of(context).faintText,
+                semanticLabel: 'Pinned',
+              ),
+            ),
+        ],
+      ),
+      subtitle: deck.tags.isEmpty
+          ? Text(parts.join(' · '))
+          : Wrap(
+              spacing: Insets.sm,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(parts.join(' · ')),
+                TagChips(tags: deck.tags, dense: true, maxVisible: 3),
+              ],
+            ),
       onTap: () => context.push(AppRoutes.deck(deck.id)),
       actions: [
         if (count > 0)

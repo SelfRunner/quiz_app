@@ -21,7 +21,8 @@ final activityDaysProvider = StreamProvider.autoDispose<Set<DateTime>>(
 );
 
 /// The current user's own notes, newest created first (max 10), for the
-/// recent activity feed. Empty while loading or on error.
+/// recent activity feed; notes of archived subjects are left out. Empty
+/// while loading or on error.
 final recentNotesProvider = Provider.autoDispose<List<Note>>((ref) {
   final userId = ref.watch(currentUserIdProvider);
   final notes = ref.watch(accessibleNotesProvider).value ?? const <Note>[];
@@ -29,7 +30,11 @@ final recentNotesProvider = Provider.autoDispose<List<Note>>((ref) {
     for (final n in notes)
       if (n.deletedAt == null && (userId == null || n.ownerId == userId)) n,
   ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  return own.take(10).toList();
+  final archived = {
+    for (final id in {for (final n in own) n.subjectId})
+      if (ref.watch(subjectProvider(id)).value?.archivedAt != null) id,
+  };
+  return own.where((n) => !archived.contains(n.subjectId)).take(10).toList();
 });
 
 /// One row of the dashboard's recent activity feed.

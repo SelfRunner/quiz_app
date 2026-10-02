@@ -9,6 +9,7 @@ import '../../../core/widgets/sync_status_indicator.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/sync/sync_engine.dart';
 import '../../auth/application/sign_out.dart';
+import '../../search/widgets/search_entry.dart';
 import 'widgets/ai_settings_section.dart';
 import 'widgets/study_settings_section.dart';
 
@@ -20,7 +21,10 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ResponsiveScaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: const [SearchIconButton()],
+      ),
       maxWidth: ContentWidth.form + 2 * Insets.gutterWide,
       scrollable: true,
       body: const Column(

@@ -7,16 +7,21 @@ import '../../../ai/llm_provider.dart';
 import '../../../core/providers.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
+import '../../../core/widgets/export_menu.dart';
+import '../../../core/widgets/pin_button.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/card_review.dart';
 import '../../../data/models/deck.dart';
 import '../../../data/models/quiz_source.dart';
 import '../../../data/models/share.dart';
 import '../../../data/models/syncable.dart';
+import '../../../data/repositories/organization_repository.dart';
 import '../../../study/fsrs.dart';
 import '../../quizzes/widgets/source_summary.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../../sharing/widgets/shared_by_chip.dart';
+import '../application/deck_io_actions.dart';
 import '../application/deck_providers.dart';
 import '../domain/deck_format.dart';
 
@@ -80,6 +85,11 @@ class DeckDetailScreen extends ConsumerWidget {
         ),
         actions: [
           if (deck != null && owner) ...[
+            PinButton.item(
+              kind: TaggableKind.deck,
+              id: deck.id,
+              pinned: deck.pinned,
+            ),
             IconButton(
               key: const Key('share-deck'),
               tooltip: 'Share',
@@ -97,14 +107,41 @@ class DeckDetailScreen extends ConsumerWidget {
               icon: const Icon(Icons.edit_outlined),
               onPressed: () => context.push(AppRoutes.deckEdit(deck.id)),
             ),
+            ExportMenu(items: deckExportItems(deck)),
             PopupMenuButton<String>(
               key: const Key('deck-more'),
               tooltip: 'More',
               icon: const Icon(Icons.more_horiz),
-              onSelected: (v) {
-                if (v == 'delete') _delete(context, ref, deck);
+              onSelected: (v) => switch (v) {
+                'import' => importCardsIntoDeck(context, ref, deck),
+                'tags' => editItemTags(
+                  context,
+                  ref,
+                  kind: TaggableKind.deck,
+                  id: deck.id,
+                  tags: deck.tags,
+                ),
+                'delete' => _delete(context, ref, deck),
+                _ => null,
               },
               itemBuilder: (context) => const [
+                PopupMenuItem(
+                  key: Key('deck-import-cards'),
+                  value: 'import',
+                  child: ListTile(
+                    leading: Icon(Icons.upload_file_outlined),
+                    title: Text('Import cards (CSV / Anki)'),
+                  ),
+                ),
+                PopupMenuItem(
+                  key: Key('deck-edit-tags'),
+                  value: 'tags',
+                  child: ListTile(
+                    leading: Icon(Icons.sell_outlined),
+                    title: Text('Edit tags'),
+                  ),
+                ),
+                PopupMenuDivider(),
                 PopupMenuItem(
                   value: 'delete',
                   child: ListTile(
@@ -115,7 +152,8 @@ class DeckDetailScreen extends ConsumerWidget {
               ],
             ),
             Gaps.w8,
-          ] else if (deck != null)
+          ] else if (deck != null) ...[
+            ExportMenu(items: deckExportItems(deck)),
             Padding(
               padding: const EdgeInsets.only(right: Insets.sm),
               child: CopyToAccountButton(
@@ -124,6 +162,7 @@ class DeckDetailScreen extends ConsumerWidget {
                 compact: true,
               ),
             ),
+          ],
         ],
       ),
       body: switch (deckAsync) {
@@ -241,6 +280,40 @@ class _InfoSection extends ConsumerWidget {
         ),
         Gaps.h12,
         Text(deck.title, style: theme.textTheme.headlineMedium),
+        if (deck.tags.isNotEmpty || owner) ...[
+          Gaps.h8,
+          Wrap(
+            spacing: Insets.xs,
+            runSpacing: Insets.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TagChips(tags: deck.tags),
+              if (owner)
+                TextButton.icon(
+                  key: const Key('deck-tags-button'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: colors.mutedText,
+                  ),
+                  onPressed: () => editItemTags(
+                    context,
+                    ref,
+                    kind: TaggableKind.deck,
+                    id: deck.id,
+                    tags: deck.tags,
+                  ),
+                  icon: Icon(
+                    deck.tags.isEmpty
+                        ? Icons.sell_outlined
+                        : Icons.edit_outlined,
+                    size: 16,
+                  ),
+                  label: Text(deck.tags.isEmpty ? 'Add tags' : 'Edit'),
+                ),
+            ],
+          ),
+        ],
         if (description.isNotEmpty) ...[
           Gaps.h8,
           Text(
