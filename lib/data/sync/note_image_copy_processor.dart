@@ -14,7 +14,7 @@ import '../remote/remote_data_source.dart';
 /// - on success, or when the target already exists (409),
 /// - when the source is gone / no longer readable (any permanent error):
 ///   the blob then stays missing, by design (no data leak after revoke).
-/// Network/transient errors leave the row for the next sync. Runs right
+/// Network/transient/schema-outdated errors leave the row for the next sync. Runs right
 /// after a copy (ShareRepository) and on every sync (leftovers).
 class NoteImageCopyProcessor {
   NoteImageCopyProcessor(
@@ -61,6 +61,7 @@ class NoteImageCopyProcessor {
             rethrow;
           case RemoteErrorKind.transient:
           case RemoteErrorKind.dependency:
+          case RemoteErrorKind.schemaOutdated:
             continue; // Keep the row; retry on a later sync.
           case RemoteErrorKind.conflict:
           case RemoteErrorKind.permanent:

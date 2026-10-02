@@ -42,9 +42,10 @@ class PullCursor {
   String toString() => 'PullCursor($updatedAt, $id)';
 }
 
-/// A local change the server rejected permanently. The rejected row JSON is
-/// kept so the user's content is not lost when the server version is
-/// restored locally.
+/// A local change the server rejected permanently (an outbox op that was
+/// dropped). Every dropped op is recorded, including Storage ops; for row
+/// upserts the rejected row JSON is kept so the user's content is not lost
+/// when the server version is restored locally.
 class RejectedChange {
   const RejectedChange({
     required this.id,
@@ -53,12 +54,21 @@ class RejectedChange {
     required this.payload,
     required this.message,
     required this.at,
+    this.op = 'upsert',
   });
 
   /// Id of the dropped outbox op.
   final String id;
+
+  /// Table, or Storage bucket for file ops.
   final String table;
+
+  /// Row id, or object path for file ops.
   final String rowId;
+
+  /// `OutboxOpType` wire name of the dropped op (`upsert`, `upload_image`,
+  /// ...). Entries written by older builds are upserts.
+  final String op;
 
   /// The row the user tried to save (snake_case JSON), if any.
   final Map<String, dynamic>? payload;
@@ -71,6 +81,7 @@ class RejectedChange {
     'id': id,
     'table': table,
     'row_id': rowId,
+    'op': op,
     'payload': payload,
     'message': message,
     'at': at.toUtc().toIso8601String(),
@@ -83,6 +94,7 @@ class RejectedChange {
         id: json['id'] as String,
         table: json['table'] as String,
         rowId: json['row_id'] as String,
+        op: json['op'] as String? ?? 'upsert',
         payload: json['payload'] as Map<String, dynamic>?,
         message: json['message'] as String,
         at: DateTime.parse(json['at'] as String),
@@ -114,8 +126,11 @@ class SyncMetaStore {
   static const String _sharedWithMeKey = 'shared_with_me';
   static const String _rejectedKey = 'rejected_changes';
 
-  /// Oldest rejected changes are discarded beyond this many.
-  static const int maxRejectedChanges = 50;
+  /// Beyond this many rejected changes the oldest are discarded, derived
+  /// study rows (`card_reviews`, `mistakes`) first.
+  static const int maxRejectedChanges = 100;
+
+  static const Set<String> _lowValueTables = {'card_reviews', 'mistakes'};
 
   static String cursorKey(String table) => 'cursor:$table';
 
@@ -138,6 +153,9 @@ class SyncMetaStore {
   DateTime? get lastReconciledAt => _date(_lastReconciledAtKey);
   Future<void> setLastReconciledAt(DateTime at) =>
       box.put(_lastReconciledAtKey, at.toUtc().toIso8601String());
+
+  /// Makes the next sync reconcile (e.g. after an incomplete pass).
+  Future<void> resetLastReconciledAt() => box.delete(_lastReconciledAtKey);
 
   /// Keys (`{type}:{resourceId}`) of shares received, as of the last sync.
   /// Null before the first share check.
@@ -196,10 +214,11 @@ class SyncMetaStore {
 
   Future<void> addRejectedChange(RejectedChange change) {
     final all = [...rejectedChanges, change];
-    final kept = all.length > maxRejectedChanges
-        ? all.sublist(all.length - maxRejectedChanges)
-        : all;
-    return _putRejected(kept);
+    while (all.length > maxRejectedChanges) {
+      final lowValue = all.indexWhere((c) => _lowValueTables.contains(c.table));
+      all.removeAt(lowValue >= 0 ? lowValue : 0);
+    }
+    return _putRejected(all);
   }
 
   Future<void> removeRejectedChange(String id) =>

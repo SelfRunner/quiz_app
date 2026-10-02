@@ -13,8 +13,18 @@ enum RemoteErrorKind {
   auth,
 
   /// The server refused this request and will keep refusing it (RLS
-  /// violation, constraint/validation error, 4xx). The op is dropped.
+  /// violation, constraint/validation error, 4xx). The op is dropped (its
+  /// content is kept in `SyncMetaStore.rejectedChanges`).
   permanent,
+
+  /// The server database is older than the app: PostgREST schema-cache
+  /// errors (`PGRST204` missing column, `PGRST205` missing table, `PGRST202`
+  /// missing function, `PGRST200` missing relationship), Postgres `42703` /
+  /// `42P01` / `42883` (undefined column / table / function) or a missing
+  /// Storage bucket. Not the client's fault and fixed by running the latest
+  /// migration: ops are **never** dropped or counted as failed attempts;
+  /// they stay queued until the server catches up.
+  schemaOutdated,
 
   /// Foreign-key violation: usually the parent row has not been pushed yet.
   /// The op is deferred to the end of the queue and retried.

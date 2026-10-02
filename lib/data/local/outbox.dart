@@ -122,6 +122,15 @@ class Outbox {
     return updated;
   }
 
+  /// Stores [error] as the op's `lastError` without counting an attempt
+  /// (unless the op changed meanwhile). Used while the server schema is out
+  /// of date: the op is not at fault and must not become "stuck".
+  Future<void> noteError(OutboxOp op, String error) async {
+    final current = _read(op.id);
+    if (current == null || current != op || op.lastError == error) return;
+    await _write(op.copyWith(lastError: error));
+  }
+
   /// Unconditionally removes an op (permanent failure / obsolete).
   Future<void> drop(String opId) => box.delete(opId);
 

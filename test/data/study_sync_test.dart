@@ -214,7 +214,10 @@ void main() {
       await engine.sync();
       expect(h.db.outbox.length, 0);
       expect(engine.currentStatus.state, SyncState.idle);
-      expect(engine.rejectedChanges, isEmpty);
+      // No error state, but the dropped op is still kept and counted.
+      expect(engine.rejectedChanges.single.rowId, r.id);
+      expect(engine.rejectedChanges.single.table, 'card_reviews');
+      expect(engine.currentStatus.rejectedChanges, 1);
       expect(remote.tables['card_reviews'], isEmpty);
       expect(h.db.decks.get('bd'), isNull, reason: 'reconciled');
       expect(await reviewsFor(h.db).watchAll().first, isEmpty);

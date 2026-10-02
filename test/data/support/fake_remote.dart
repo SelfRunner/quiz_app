@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'package:quiz_app/data/local/sync_meta_store.dart';
 import 'package:quiz_app/data/models/models.dart';
 import 'package:quiz_app/data/remote/remote_data_source.dart';
+import 'package:quiz_app/data/remote/supabase_remote_data_source.dart';
 import 'package:quiz_app/data/sync/connectivity_monitor.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 /// In-memory Supabase imitation with RLS-like visibility for [userId].
 class FakeRemote
@@ -85,6 +87,49 @@ class FakeRemote
     }
   }
 
+  /// Server one migration behind: tables that don't exist yet (any access
+  /// fails with PostgREST `PGRST205`, HTTP 404) ...
+  final Set<String> missingTables = {};
+
+  /// ... and columns that don't exist yet (an upsert carrying one fails
+  /// with `PGRST204`, HTTP 400). Clear both to simulate the migration.
+  final Map<String, Set<String>> missingColumns = {};
+
+  /// Calls rejected by the simulated schema (`{op}:{table}`).
+  final List<String> schemaErrors = [];
+
+  /// Throws what `SupabaseRemoteDataSource` would for a schema-cache miss
+  /// (the real `mapRemoteError` classification).
+  void _checkSchema(String op, String table, [Map<String, dynamic>? row]) {
+    if (missingTables.contains(table)) {
+      schemaErrors.add('$op:$table');
+      throw mapRemoteError(
+        PostgrestException(
+          message:
+              "Could not find the table 'public.$table' in the schema "
+              'cache',
+          code: 'PGRST205',
+          details: 'Not Found',
+        ),
+      );
+    }
+    final columns = missingColumns[table];
+    if (row == null || columns == null) return;
+    for (final column in row.keys) {
+      if (!columns.contains(column)) continue;
+      schemaErrors.add('$op:$table');
+      throw mapRemoteError(
+        PostgrestException(
+          message:
+              "Could not find the '$column' column of '$table' in the "
+              'schema cache',
+          code: 'PGRST204',
+          details: 'Bad Request',
+        ),
+      );
+    }
+  }
+
   bool _shared(ShareResourceType type, String? id) =>
       id != null &&
       shares.any(
@@ -135,6 +180,7 @@ class FakeRemote
     upsertCalls++;
     await upsertDelay?.call();
     _checkOnline();
+    _checkSchema('upsert', table, row);
     final hooked = upsertHook?.call(table, row);
     if (hooked != null) throw hooked;
     final id = row['id'] as String;
@@ -223,6 +269,7 @@ class FakeRemote
     pullCalls++;
     pullAfters.add(after);
     _checkOnline();
+    _checkSchema('pull', table);
     int cmp(Map<String, dynamic> a, Map<String, dynamic> b) {
       final c = DateTime.parse(a['updated_at'] as String)
           .compareTo(DateTime.parse(b['updated_at'] as String));
@@ -243,6 +290,7 @@ class FakeRemote
   @override
   Future<Map<String, dynamic>?> fetchById(String table, String id) async {
     _checkOnline();
+    _checkSchema('fetchById', table);
     final row = tables[table]![id];
     return row != null && visible(table, row) ? _copy(row) : null;
   }
@@ -254,6 +302,7 @@ class FakeRemote
     String value,
   ) async {
     _checkOnline();
+    _checkSchema('fetchWhere', table);
     return tables[table]!.values
         .where((r) => r[column] == value && visible(table, r))
         .map(_copy)
@@ -263,6 +312,7 @@ class FakeRemote
   @override
   Future<Set<String>> fetchVisibleIds(String table, List<String> ids) async {
     _checkOnline();
+    _checkSchema('fetchVisibleIds', table);
     return {
       for (final id in ids)
         if (tables[table]![id] != null && visible(table, tables[table]![id]!))

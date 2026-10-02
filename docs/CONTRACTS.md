@@ -577,7 +577,9 @@ abstract interface class ImageStore {
 
 enum SyncState { idle, syncing, offline, error }
 class SyncStatus { SyncState state; DateTime? lastSyncedAt; int pendingOps; String? error;
-  int stuckOps; int rejectedChanges; } // freezed (last two added in Phase 3)
+  int stuckOps; int rejectedChanges;          // freezed (added in Phase 3)
+  bool serverOutdated; List<String> unavailableTables; } // server schema behind the app
+const String serverOutdatedMessage;           // lib/data/sync/sync_engine.dart
 abstract interface class SyncEngine {
   Stream<SyncStatus> get status;
   SyncStatus get currentStatus;
@@ -747,10 +749,33 @@ cache), `lib/data/remote/` (`*RemoteDataSource` interfaces +
   `42501`, CHECK `23514`): the op is dropped, the server version of the row
   is restored locally, `status.error` is set, and
   `(engine as DefaultSyncEngine).rejections` emits a `SyncRejection` (for a
-  snackbar). The user's rejected row JSON is kept in `sync_meta` (max 50):
-  `engine.rejectedChanges` (`RejectedChange{id, table, rowId, payload,
-  message, at}`), count in `status.rejectedChanges`,
-  `engine.dismissRejectedChange(id)`.
+  snackbar). **Every** dropped op (row upserts and Storage ops) is kept in
+  `sync_meta` (max 100, oldest `card_reviews`/`mistakes` entries evicted
+  first): `engine.rejectedChanges` (`RejectedChange{id, table, rowId, op,
+  payload, message, at}`; `op` = `OutboxOpType` wire name, `table` = bucket
+  and `rowId` = path for file ops), count in `status.rejectedChanges`,
+  `engine.dismissRejectedChange(id)`. The one quiet drop (a review/mistake
+  whose deck/quiz is no longer readable, `42501`) is recorded and counted
+  too, but does not set `state: error` or emit a `SyncRejection`.
+- **Server schema out of date** (the Supabase project is behind the app's
+  migrations): PostgREST schema-cache errors `PGRST204` (missing column),
+  `PGRST205` (missing table), `PGRST202` (missing function), `PGRST200`
+  (missing relationship), Postgres `42703`/`42P01`/`42883`, any message
+  "... in the schema cache", or Storage "Bucket not found" are classified
+  `RemoteErrorKind.schemaOutdated`. Such ops are **never dropped** and never
+  count as failed attempts (not "stuck"): they stay queued (`lastError` set)
+  until the migration is applied. Status: `state: error`,
+  `serverOutdated: true`, `unavailableTables` (sorted table / bucket names,
+  e.g. `['quiz_attempts']` or `['card_reviews', 'decks']`), and `error`
+  starts with `serverOutdatedMessage` ("The server database needs an update
+  (run the latest Supabase migration). Your changes are kept on this
+  device."). **UI**: when `status.serverOutdated`, show a specific banner
+  with `serverOutdatedMessage` (not the generic "Sync problem"); pending ops
+  remain in `status.pendingOps`. Everything else keeps syncing; affected
+  tables are retried on every sync (capped backoff 5 s .. 5 min plus the
+  periodic trigger) and the flags clear on the first cycle after the
+  migration. Repositories map it to `UnknownException` with a similar
+  message.
 - Stuck changes: ops that keep failing with server errors (5xx/unknown) are
   **never dropped**; after 8 attempts they count in `status.stuckOps` (state
   `error`, message "... Retrying automatically.") and keep retrying.
@@ -777,16 +802,22 @@ user signs back in.
 **Sync algorithm**
 - Push: outbox FIFO; upserts of the same row coalesce in place. Network error
   -> stop, `offline`; JWT error -> `error`; FK `23503` -> deferred and retried
-  (3 passes); permanent (`42501`, `23xxx`, `22xxx`, `P0001/P0002`, 4xx) ->
-  dropped + reported (payload kept, see above); transient (5xx/unknown,
-  408/429) -> retried with capped backoff, never dropped (FK-blocked ops are
-  not counted while other ops fail transiently).
+  (3 passes); schema out of date (see above) -> kept, no attempt counted,
+  the table's later ops are skipped for this cycle (per-row order kept)
+  while other tables' ops continue; permanent (`42501`, `23xxx`, `22xxx`,
+  `P0001/P0002`, other 4xx) -> dropped + reported (op recorded in
+  `rejectedChanges`, see above); transient (5xx/unknown, 408/429) ->
+  retried with capped backoff, never dropped (FK-blocked ops are not
+  counted while other ops fail transiently or are schema-blocked).
 - After push, pending `note_image_copies` rows are processed (Storage copy
   `from_path` -> `to_path` within the row's `bucket`, then the row is
   deleted; also deleted when the source is gone/unreadable or the target
   exists).
-- Pull: per table, keyset pages `(updated_at, id) > cursor` ascending, 500
-  rows. Cursor = raw server `updated_at` string + id of the last row
+- Pull: per table, isolated (a table failing with a non-network error,
+  e.g. `PGRST205` missing table, is skipped and listed in
+  `status.unavailableTables` / `status.error`; the other tables still pull;
+  it is retried every sync from its unchanged cursor), keyset pages
+  `(updated_at, id) > cursor` ascending, 500 rows. Cursor = raw server `updated_at` string + id of the last row
   (`sync_meta` `cursor:{table}`), never the client clock; each sync starts
   5 s before the cursor (transaction-start `now()` skew) and merges
   idempotently.
@@ -804,6 +835,9 @@ user signs back in.
   revoked share (or every 30 min) -> reconciliation: ids of locally cached
   rows owned by others are checked with `select id where id in (...)` and
   rows no longer visible are purged (plus their cached images).
+  Schema-outdated tables are skipped in both (nothing is purged on a failed
+  check); a new share whose backfill was incomplete is not remembered, so
+  it is backfilled again, and an incomplete reconciliation reruns next sync.
 
 **Repositories**: local-first; writes set `ownerId` = current user, client
 UUID, `createdAt/updatedAt` = now (server overwrites `updated_at`), then
