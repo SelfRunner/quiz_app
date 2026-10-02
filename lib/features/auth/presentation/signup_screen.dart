@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../application/auth_validators.dart';
 import 'widgets/auth_scaffold.dart';
@@ -78,10 +79,10 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   'We sent a confirmation link to $sentTo. Open it to '
                   'activate your account, then sign in.',
             ),
-            const SizedBox(height: 24),
+            Gaps.h24,
             FilledButton(
               style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
+                minimumSize: const Size.fromHeight(44),
               ),
               onPressed: () => context.go(AppRoutes.login),
               child: const Text('Back to sign in'),
@@ -110,10 +111,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 decoration: const InputDecoration(
                   labelText: 'Display name',
                   helperText: 'Shown to people you share with',
-                  prefixIcon: Icon(Icons.person_outline),
                 ),
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               TextFormField(
                 key: const Key('signup-email'),
                 controller: _email,
@@ -122,12 +122,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 autofillHints: const [AutofillHints.email],
                 autocorrect: false,
                 validator: AuthValidators.email,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email_outlined),
-                ),
+                decoration: const InputDecoration(labelText: 'Email'),
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               PasswordField(
                 key: const Key('signup-password'),
                 controller: _password,
@@ -137,7 +134,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                     'At least ${AuthValidators.minPasswordLength} characters, '
                     'letters and numbers',
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               PasswordField(
                 key: const Key('signup-confirm'),
                 controller: _confirm,
@@ -147,18 +144,15 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
               ),
-              const SizedBox(height: 24),
-              if (_error != null) ...[
-                FormMessage(message: _error!),
-                const SizedBox(height: 16),
-              ],
+              Gaps.h24,
+              if (_error != null) ...[FormMessage(message: _error!), Gaps.h16],
               LoadingButton(
                 key: const Key('signup-submit'),
                 label: 'Create account',
                 loading: _loading,
                 onPressed: _submit,
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               Wrap(
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,

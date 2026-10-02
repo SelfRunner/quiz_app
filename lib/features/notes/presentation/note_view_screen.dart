@@ -3,15 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../core/widgets/note_markdown.dart';
-import '../../../core/widgets/responsive.dart';
-import '../../../core/widgets/state_views.dart';
 import '../../../core/widgets/sync_status_indicator.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
+import '../../subjects/presentation/subject_detail_screen.dart' show MetaChip;
 import '../application/note_actions.dart';
 
 /// Rendered note with its quizzes. Owners can edit, share, delete and
@@ -30,6 +30,7 @@ class NoteViewScreen extends ConsumerWidget {
       appBar: AppBar(),
       body: AsyncValueView<Note?>(
         value: note,
+        loading: const ContentContainer(child: LoadingSkeleton()),
         onRetry: () => ref.invalidate(noteProvider(noteId)),
         data: (_) => const NotFoundView(what: 'Note'),
       ),
@@ -45,6 +46,7 @@ class _NoteView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final isOwner = note.isOwnedBy(ref.watch(currentUserIdProvider));
     final subject = ref.watch(subjectProvider(note.subjectId)).value;
     final twoPane = Breakpoints.isExpanded(context);
@@ -60,10 +62,14 @@ class _NoteView extends ConsumerWidget {
 
     final actions = <Widget>[
       if (isOwner) ...[
-        IconButton(
-          tooltip: 'Generate quiz from this note',
-          icon: const Icon(Icons.auto_awesome_outlined),
-          onPressed: generateQuiz,
+        AiGate(
+          onReady: generateQuiz,
+          child: IconButton(
+            key: const Key('note-generate-quiz'),
+            tooltip: 'Generate quiz from this note',
+            icon: const Icon(Icons.auto_awesome_outlined),
+            onPressed: generateQuiz,
+          ),
         ),
         IconButton(
           tooltip: 'Share',
@@ -83,6 +89,7 @@ class _NoteView extends ConsumerWidget {
         ),
         PopupMenuButton<String>(
           tooltip: 'More',
+          icon: const Icon(Icons.more_horiz),
           onSelected: (v) async {
             if (v != 'delete') return;
             final deleted = await NoteActions.delete(context, ref, note);
@@ -103,9 +110,10 @@ class _NoteView extends ConsumerWidget {
             ),
           ],
         ),
+        Gaps.w4,
       ] else
         Padding(
-          padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: Insets.sm),
           child: CopyToAccountButton(
             type: ShareResourceType.note,
             resourceId: note.id,
@@ -113,71 +121,63 @@ class _NoteView extends ConsumerWidget {
         ),
     ];
 
+    final metaStyle = theme.textTheme.bodySmall?.copyWith(
+      color: colors.mutedText,
+    );
     final meta = Wrap(
-      spacing: 8,
-      runSpacing: 4,
+      spacing: Insets.md,
+      runSpacing: Insets.xs,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         if (subject != null)
-          ActionChip(
-            avatar: const Icon(Icons.folder_outlined, size: 18),
-            label: Text(subject.title),
-            onPressed: () => context.push(AppRoutes.subject(subject.id)),
+          InkWell(
+            key: const Key('note-subject-link'),
+            borderRadius: Radii.smAll,
+            onTap: () => context.push(AppRoutes.subject(subject.id)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Insets.xxs,
+                vertical: Insets.xxs,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SubjectColorDot(color: subject.color, size: 8),
+                  Gaps.w8,
+                  Text(subject.title, style: metaStyle),
+                ],
+              ),
+            ),
           ),
         if (!isOwner)
-          const Chip(
-            avatar: Icon(Icons.visibility_outlined, size: 18),
-            label: Text('Shared · read-only'),
+          const MetaChip(
+            icon: Icons.visibility_outlined,
+            label: 'Shared · read-only',
           ),
-        Text(
-          'Updated ${formatRelativeTime(note.updatedAt)}',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
+        Text('Updated ${formatRelativeTime(note.updatedAt)}', style: metaStyle),
       ],
     );
 
     final content = note.contentMd.trim().isEmpty
-        ? Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: EmptyState(
-              icon: Icons.edit_note,
-              title: 'This note is empty',
-              action: isOwner
-                  ? FilledButton.icon(
-                      onPressed: () =>
-                          context.push(AppRoutes.noteEdit(note.id)),
-                      icon: const Icon(Icons.edit_outlined),
-                      label: const Text('Start writing'),
-                    )
-                  : null,
-            ),
+        ? EmptyState(
+            compact: true,
+            icon: Icons.edit_note,
+            title: 'This note is empty',
+            action: isOwner
+                ? FilledButton.icon(
+                    onPressed: () => context.push(AppRoutes.noteEdit(note.id)),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('Start writing'),
+                  )
+                : null,
           )
         : NoteMarkdown(data: note.contentMd);
 
-    final quizzes = Column(
+    // QuizListSection brings its own "Quizzes" header and actions.
+    final studySections = Column(
+      key: const Key('note-study-sections'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            const Icon(Icons.quiz_outlined, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Quizzes from this note',
-                style: theme.textTheme.titleMedium,
-              ),
-            ),
-            if (isOwner)
-              TextButton.icon(
-                onPressed: generateQuiz,
-                icon: const Icon(Icons.auto_awesome_outlined, size: 18),
-                label: const Text('Generate'),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
         QuizListSection(
           subjectId: note.subjectId,
           noteId: note.id,
@@ -190,16 +190,25 @@ class _NoteView extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(title, style: theme.textTheme.headlineMedium),
-        const SizedBox(height: 8),
+        Gaps.h8,
         meta,
-        const Divider(height: 32),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: Insets.lg),
+          child: Divider(height: 1, color: colors.hairline),
+        ),
         content,
       ],
     );
 
+    final hairline = BorderSide(color: colors.hairline);
     return Scaffold(
       appBar: AppBar(
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          subject?.title ?? '',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleSmall?.copyWith(color: colors.mutedText),
+        ),
         actions: actions,
       ),
       body: twoPane
@@ -208,27 +217,44 @@ class _NoteView extends ConsumerWidget {
               children: [
                 Expanded(
                   child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(32, 16, 32, 48),
-                    child: MaxWidth(maxWidth: 820, child: article),
+                    padding: const EdgeInsets.only(
+                      top: Insets.lg,
+                      bottom: Insets.xxxl,
+                    ),
+                    child: ContentContainer(child: article),
                   ),
                 ),
-                const VerticalDivider(width: 1),
-                SizedBox(
-                  width: 380,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: quizzes,
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.sidebar,
+                    border: Border(left: hairline),
+                  ),
+                  child: SizedBox(
+                    width: 360,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(Insets.lg),
+                      child: studySections,
+                    ),
                   ),
                 ),
               ],
             )
           : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
-              child: MaxWidth(
-                maxWidth: 820,
+              padding: const EdgeInsets.only(
+                top: Insets.sm,
+                bottom: Insets.xxxl,
+              ),
+              child: ContentContainer(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [article, const Divider(height: 48), quizzes],
+                  children: [
+                    article,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: Insets.xl),
+                      child: Divider(height: 1, color: colors.hairline),
+                    ),
+                    studySections,
+                  ],
                 ),
               ),
             ),

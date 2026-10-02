@@ -3,8 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
-import '../../../core/widgets/responsive.dart';
-import '../../../core/widgets/state_views.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
@@ -12,7 +11,7 @@ import '../../notes/presentation/widgets/note_tile.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
 import '../application/subject_actions.dart';
-import 'widgets/subject_visuals.dart';
+import 'widgets/subject_files_tab.dart';
 
 /// Display name of whoever shared [ownerId]'s content with the current user,
 /// from the "shared with me" list (online only; null when unknown).
@@ -32,8 +31,9 @@ final sharedByNameProvider = Provider.autoDispose.family<String?, String>((
   return null;
 });
 
-/// A subject's notes and quizzes. Owners can edit, delete, share and add
-/// content; shared subjects are read-only with a "copy to my account" action.
+/// A subject's notes, quizzes and files (tabs). Owners can edit, delete,
+/// share and add content; shared subjects are read-only with a "copy to my
+/// account" action.
 class SubjectDetailScreen extends ConsumerWidget {
   const SubjectDetailScreen({super.key, required this.subjectId});
 
@@ -48,6 +48,7 @@ class SubjectDetailScreen extends ConsumerWidget {
       appBar: AppBar(),
       body: AsyncValueView<Subject?>(
         value: subject,
+        loading: const ContentContainer(child: LoadingSkeleton()),
         onRetry: () => ref.invalidate(subjectProvider(subjectId)),
         data: (_) => const NotFoundView(what: 'Subject'),
       ),
@@ -63,11 +64,11 @@ class _SubjectDetail extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isOwner = subject.isOwnedBy(ref.watch(currentUserIdProvider));
-    final twoPane = Breakpoints.isExpanded(context);
+    final theme = Theme.of(context);
 
     final actions = <Widget>[
       if (isOwner) ...[
-        _GenerateMenu(subjectId: subject.id),
+        GenerateWithAiButton(subjectId: subject.id),
         IconButton(
           tooltip: 'Share',
           icon: const Icon(Icons.share_outlined),
@@ -80,6 +81,7 @@ class _SubjectDetail extends ConsumerWidget {
         ),
         PopupMenuButton<String>(
           tooltip: 'More',
+          icon: const Icon(Icons.more_horiz),
           onSelected: (v) async {
             if (v == 'edit') {
               await SubjectActions.edit(context, ref, subject);
@@ -115,9 +117,10 @@ class _SubjectDetail extends ConsumerWidget {
             ),
           ],
         ),
+        Gaps.w4,
       ] else
         Padding(
-          padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: Insets.sm),
           child: CopyToAccountButton(
             type: ShareResourceType.subject,
             resourceId: subject.id,
@@ -125,81 +128,103 @@ class _SubjectDetail extends ConsumerWidget {
         ),
     ];
 
-    final header = _SubjectHeader(subject: subject, isOwner: isOwner);
-    final notesPane = _NotesPane(subject: subject, isOwner: isOwner);
-    final quizzesPane = SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-      child: QuizListSection(subjectId: subject.id, readOnly: !isOwner),
-    );
-
-    final fab = isOwner
-        ? FloatingActionButton.extended(
-            key: const Key('new-note-fab'),
-            onPressed: () => SubjectActions.newNote(context, ref, subject.id),
-            icon: const Icon(Icons.note_add_outlined),
-            label: const Text('New note'),
-          )
-        : null;
-
-    if (twoPane) {
-      return Scaffold(
-        appBar: AppBar(title: Text(subject.title), actions: actions),
-        floatingActionButton: fab,
-        body: Column(
-          children: [
-            header,
-            const Divider(height: 1),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: _PaneWithTitle(
-                      icon: Icons.description_outlined,
-                      title: 'Notes',
-                      child: notesPane,
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
-                  Expanded(
-                    child: _PaneWithTitle(
-                      icon: Icons.quiz_outlined,
-                      title: 'Quizzes',
-                      child: quizzesPane,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
-        appBar: AppBar(title: Text(subject.title), actions: actions),
-        floatingActionButton: fab,
+        appBar: AppBar(
+          titleSpacing: 0,
+          title: Row(
+            children: [
+              SubjectColorDot(color: subject.color, size: 12),
+              Gaps.w12,
+              Flexible(
+                child: Text(
+                  subject.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          actions: actions,
+        ),
         body: NestedScrollView(
           headerSliverBuilder: (context, _) => [
-            SliverToBoxAdapter(child: header),
+            SliverToBoxAdapter(
+              child: _SubjectHeader(subject: subject, isOwner: isOwner),
+            ),
             SliverPersistentHeader(
               pinned: true,
               delegate: _TabBarDelegate(
-                const TabBar(
-                  tabs: [
-                    Tab(icon: Icon(Icons.description_outlined), text: 'Notes'),
-                    Tab(icon: Icon(Icons.quiz_outlined), text: 'Quizzes'),
-                  ],
-                ),
-                Theme.of(context).colorScheme.surface,
+                background: theme.scaffoldBackgroundColor,
+                hairline: AppColors.of(context).hairline,
               ),
             ),
           ],
-          body: TabBarView(children: [notesPane, quizzesPane]),
+          body: TabBarView(
+            children: [
+              _NotesTab(subject: subject, isOwner: isOwner),
+              SingleChildScrollView(
+                key: const PageStorageKey('subject-quizzes'),
+                padding: const EdgeInsets.only(
+                  top: Insets.sm,
+                  bottom: Insets.xxxl,
+                ),
+                child: ContentContainer(
+                  child: QuizListSection(
+                    subjectId: subject.id,
+                    readOnly: !isOwner,
+                  ),
+                ),
+              ),
+              SubjectFilesTab(subject: subject, isOwner: isOwner),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// App-bar "Generate with AI" button: locked until AI is set up, then opens
+/// a menu (quiz / note) for [subjectId].
+class GenerateWithAiButton extends StatelessWidget {
+  const GenerateWithAiButton({super.key, required this.subjectId});
+
+  final String subjectId;
+
+  @override
+  Widget build(BuildContext context) {
+    void go(AiGenerateKind kind) =>
+        context.push(AppRoutes.generate(kind: kind, subjectId: subjectId));
+    return MenuAnchor(
+      menuChildren: [
+        MenuItemButton(
+          key: const Key('generate-quiz'),
+          leadingIcon: const Icon(Icons.quiz_outlined, size: 18),
+          onPressed: () => go(AiGenerateKind.quiz),
+          child: const Text('Generate quiz'),
+        ),
+        MenuItemButton(
+          key: const Key('generate-note'),
+          leadingIcon: const Icon(Icons.description_outlined, size: 18),
+          onPressed: () => go(AiGenerateKind.note),
+          child: const Text('Generate note'),
+        ),
+      ],
+      builder: (context, controller, _) {
+        void toggle() =>
+            controller.isOpen ? controller.close() : controller.open();
+        return AiGate(
+          onReady: toggle,
+          child: IconButton(
+            key: const Key('generate-with-ai'),
+            tooltip: 'Generate with AI',
+            icon: const Icon(Icons.auto_awesome_outlined),
+            onPressed: toggle,
+          ),
+        );
+      },
     );
   }
 }
@@ -213,55 +238,164 @@ class _SubjectHeader extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final sharedBy = isOwner
         ? null
         : ref.watch(sharedByNameProvider(subject.ownerId));
     final description = subject.description?.trim() ?? '';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+    if (description.isEmpty && isOwner) return Gaps.h4;
+    return ContentContainer(
+      child: Padding(
+        padding: const EdgeInsets.only(top: Insets.xs, bottom: Insets.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (description.isNotEmpty)
+              Text(
+                description,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.mutedText,
+                ),
+              ),
+            if (!isOwner) ...[
+              if (description.isNotEmpty) Gaps.h8,
+              Wrap(
+                spacing: Insets.sm,
+                runSpacing: Insets.xs,
+                children: [
+                  MetaChip(
+                    icon: Icons.people_outline,
+                    label: sharedBy == null
+                        ? 'Shared with you'
+                        : 'Shared by $sharedBy',
+                  ),
+                  const MetaChip(
+                    icon: Icons.visibility_outlined,
+                    label: 'Read-only',
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Small neutral label with an icon (e.g. "Read-only").
+class MetaChip extends StatelessWidget {
+  const MetaChip({super.key, required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Insets.sm,
+        vertical: Insets.xxs + 1,
+      ),
+      decoration: BoxDecoration(
+        borderRadius: Radii.smAll,
+        border: Border.all(color: colors.hairline),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SubjectAvatar(subject: subject, size: 52),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(subject.title, style: theme.textTheme.titleLarge),
-                if (description.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+          Icon(icon, size: 14, color: colors.mutedText),
+          Gaps.w4,
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: colors.mutedText),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotesTab extends ConsumerWidget {
+  const _NotesTab({required this.subject, required this.isOwner});
+
+  final Subject subject;
+  final bool isOwner;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notes = ref.watch(notesBySubjectProvider(subject.id));
+    void generateNote() => context.push(
+      AppRoutes.generate(kind: AiGenerateKind.note, subjectId: subject.id),
+    );
+    void newNote() => SubjectActions.newNote(context, ref, subject.id);
+
+    final header = SectionHeader(
+      title: 'Notes',
+      count: notes.value?.length,
+      trailing: isOwner
+          ? FilledButton.tonalIcon(
+              key: const Key('new-note-fab'),
+              onPressed: newNote,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('New note'),
+            )
+          : null,
+    );
+
+    final Widget body = AsyncValueView<List<Note>>(
+      value: notes,
+      loading: const LoadingSkeleton(),
+      onRetry: () => ref.invalidate(notesBySubjectProvider(subject.id)),
+      data: (items) {
+        if (items.isEmpty) {
+          return EmptyState(
+            compact: true,
+            icon: Icons.description_outlined,
+            title: 'No notes yet',
+            message: isOwner
+                ? 'Write notes in Markdown, add images, or let AI draft '
+                      'study notes for you.'
+                : 'The owner has not added notes to this subject yet.',
+            action: isOwner
+                ? AiGate(
+                    onReady: generateNote,
+                    child: OutlinedButton.icon(
+                      key: const Key('notes-generate-ai'),
+                      onPressed: generateNote,
+                      icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+                      label: const Text('Generate with AI'),
                     ),
-                  ),
-                ],
-                if (!isOwner) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      Chip(
-                        avatar: const Icon(Icons.people_outline, size: 18),
-                        label: Text(
-                          sharedBy == null
-                              ? 'Shared with you'
-                              : 'Shared by $sharedBy',
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      const Chip(
-                        avatar: Icon(Icons.visibility_outlined, size: 18),
-                        label: Text('Read-only'),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ],
-                  ),
-                ],
-              ],
+                  )
+                : null,
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final n in items) NoteTile(note: n, canEdit: isOwner),
+          ],
+        );
+      },
+    );
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        try {
+          await ref.read(syncEngineProvider).sync();
+        } catch (_) {}
+      },
+      child: ListView(
+        key: const PageStorageKey('subject-notes'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: Insets.xxxl),
+        children: [
+          ContentContainer(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [header, body],
             ),
           ),
         ],
@@ -270,155 +404,45 @@ class _SubjectHeader extends ConsumerWidget {
   }
 }
 
-class _NotesPane extends ConsumerWidget {
-  const _NotesPane({required this.subject, required this.isOwner});
-
-  final Subject subject;
-  final bool isOwner;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final notes = ref.watch(notesBySubjectProvider(subject.id));
-    return AsyncValueView<List<Note>>(
-      value: notes,
-      onRetry: () => ref.invalidate(notesBySubjectProvider(subject.id)),
-      data: (items) {
-        if (items.isEmpty) {
-          return EmptyState(
-            icon: Icons.description_outlined,
-            title: 'No notes yet',
-            message: isOwner
-                ? 'Write notes in Markdown, add images, or let AI draft '
-                      'study notes for you.'
-                : 'The owner has not added notes to this subject yet.',
-            action: isOwner
-                ? Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: () =>
-                            SubjectActions.newNote(context, ref, subject.id),
-                        icon: const Icon(Icons.note_add_outlined),
-                        label: const Text('New note'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () => context.push(
-                          AppRoutes.generate(
-                            kind: AiGenerateKind.note,
-                            subjectId: subject.id,
-                          ),
-                        ),
-                        icon: const Icon(Icons.auto_awesome_outlined),
-                        label: const Text('Generate with AI'),
-                      ),
-                    ],
-                  )
-                : null,
-          );
-        }
-        return RefreshIndicator(
-          onRefresh: () async {
-            try {
-              await ref.read(syncEngineProvider).sync();
-            } catch (_) {}
-          },
-          child: ListView.builder(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-            itemCount: items.length,
-            itemBuilder: (context, i) =>
-                NoteTile(note: items[i], canEdit: isOwner),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _GenerateMenu extends StatelessWidget {
-  const _GenerateMenu({required this.subjectId});
-
-  final String subjectId;
-
-  @override
-  Widget build(BuildContext context) => PopupMenuButton<AiGenerateKind>(
-    tooltip: 'Generate with AI',
-    icon: const Icon(Icons.auto_awesome_outlined),
-    onSelected: (kind) =>
-        context.push(AppRoutes.generate(kind: kind, subjectId: subjectId)),
-    itemBuilder: (_) => const [
-      PopupMenuItem(
-        value: AiGenerateKind.quiz,
-        child: ListTile(
-          leading: Icon(Icons.quiz_outlined),
-          title: Text('Generate quiz'),
-          contentPadding: EdgeInsets.zero,
-        ),
-      ),
-      PopupMenuItem(
-        value: AiGenerateKind.note,
-        child: ListTile(
-          leading: Icon(Icons.description_outlined),
-          title: Text('Generate note'),
-          contentPadding: EdgeInsets.zero,
-        ),
-      ),
-    ],
-  );
-}
-
-class _PaneWithTitle extends StatelessWidget {
-  const _PaneWithTitle({
-    required this.icon,
-    required this.title,
-    required this.child,
-  });
-
-  final IconData icon;
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: Row(
-          children: [
-            Icon(icon, size: 20),
-            const SizedBox(width: 8),
-            Text(title, style: Theme.of(context).textTheme.titleMedium),
-          ],
-        ),
-      ),
-      Expanded(child: child),
-    ],
-  );
-}
-
 class _TabBarDelegate extends SliverPersistentHeaderDelegate {
-  _TabBarDelegate(this.tabBar, this.background);
+  _TabBarDelegate({required this.background, required this.hairline});
 
-  final TabBar tabBar;
   final Color background;
+  final Color hairline;
+
+  static const _tabBar = TabBar(
+    isScrollable: true,
+    tabAlignment: TabAlignment.start,
+    dividerHeight: 0,
+    padding: EdgeInsets.zero,
+    labelPadding: EdgeInsetsDirectional.only(end: Insets.xl),
+    tabs: [
+      Tab(text: 'Notes', height: 40),
+      Tab(text: 'Quizzes', height: 40),
+      Tab(text: 'Files', height: 40),
+    ],
+  );
 
   @override
-  double get minExtent => tabBar.preferredSize.height;
+  double get minExtent => 41;
 
   @override
-  double get maxExtent => tabBar.preferredSize.height;
+  double get maxExtent => 41;
 
   @override
   Widget build(
     BuildContext context,
     double shrinkOffset,
     bool overlapsContent,
-  ) => ColoredBox(color: background, child: tabBar);
+  ) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: background,
+      border: Border(bottom: BorderSide(color: hairline)),
+    ),
+    child: const ContentContainer(child: _tabBar),
+  );
 
   @override
   bool shouldRebuild(_TabBarDelegate oldDelegate) =>
-      oldDelegate.tabBar != tabBar || oldDelegate.background != background;
+      oldDelegate.background != background || oldDelegate.hairline != hairline;
 }

@@ -148,7 +148,7 @@ void main() {
   testWidgets('note view renders markdown and resolves note images', (
     tester,
   ) async {
-    final deps = TestDeps();
+    final deps = TestDeps()..configureAi();
     deps.subjects.seed(id: 's1', title: 'Biology');
     final image = await deps.images.saveNoteImage(
       noteId: 'n1',

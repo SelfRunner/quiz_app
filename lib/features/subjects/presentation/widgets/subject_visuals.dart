@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../../../data/models/subject.dart';
+import '../../../../core/widgets/design_system.dart';
 
-/// Preset subject colors (ARGB32, stored in `Subject.color`).
+/// Preset subject colors (ARGB32, stored in `Subject.color`). Used only as
+/// small accents (dots), never as fills.
 const List<int> subjectPalette = [
   0xFF3F51B5, // indigo
   0xFF1E88E5, // blue
@@ -18,46 +19,7 @@ const List<int> subjectPalette = [
   0xFF546E7A, // blue grey
 ];
 
-/// Display color of a subject (falls back to the theme's primary color).
-Color subjectColor(BuildContext context, int? color) =>
-    color == null ? Theme.of(context).colorScheme.primary : Color(color);
-
-/// Rounded square with the subject's initial on its color.
-class SubjectAvatar extends StatelessWidget {
-  const SubjectAvatar({super.key, required this.subject, this.size = 44});
-
-  final Subject subject;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = subjectColor(context, subject.color);
-    final onColor =
-        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-        ? Colors.white
-        : Colors.black87;
-    final title = subject.title.trim();
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(size * 0.28),
-      ),
-      child: Text(
-        title.isEmpty ? '?' : title.characters.first.toUpperCase(),
-        style: TextStyle(
-          color: onColor,
-          fontWeight: FontWeight.w600,
-          fontSize: size * 0.45,
-        ),
-      ),
-    );
-  }
-}
-
-/// Wrap of selectable color dots (with a "no color" option).
+/// Row of selectable color dots (with a "no color" option).
 class SubjectColorPicker extends StatelessWidget {
   const SubjectColorPicker({
     super.key,
@@ -70,11 +32,12 @@ class SubjectColorPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    Widget dot({required int? value, required Color color, String? tooltip}) {
+    final colors = AppColors.of(context);
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    Widget dot({required int? value, required String tooltip}) {
       final isSelected = selected == value;
       return Tooltip(
-        message: tooltip ?? '',
+        message: tooltip,
         child: Semantics(
           button: true,
           selected: isSelected,
@@ -82,30 +45,22 @@ class SubjectColorPicker extends StatelessWidget {
           child: InkResponse(
             key: Key('subject-color-${value ?? 'none'}'),
             onTap: () => onChanged(value),
-            radius: 22,
+            radius: 18,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: 36,
-              height: 36,
+              duration: Motion.fast,
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: color,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isSelected ? scheme.onSurface : scheme.outlineVariant,
-                  width: isSelected ? 3 : 1,
+                  color: isSelected ? onSurface : Colors.transparent,
+                  width: 1.5,
                 ),
               ),
-              child: isSelected
-                  ? Icon(
-                      Icons.check,
-                      size: 18,
-                      color:
-                          ThemeData.estimateBrightnessForColor(color) ==
-                              Brightness.dark
-                          ? Colors.white
-                          : Colors.black87,
-                    )
-                  : null,
+              child: value == null
+                  ? Icon(Icons.block, size: 16, color: colors.faintText)
+                  : SubjectColorDot(color: value, size: 18),
             ),
           ),
         ),
@@ -113,12 +68,11 @@ class SubjectColorPicker extends StatelessWidget {
     }
 
     return Wrap(
-      spacing: 10,
-      runSpacing: 10,
+      spacing: Insets.xs,
+      runSpacing: Insets.xs,
       children: [
-        dot(value: null, color: scheme.primary, tooltip: 'Default color'),
-        for (final c in subjectPalette)
-          dot(value: c, color: Color(c), tooltip: 'Color'),
+        dot(value: null, tooltip: 'No color'),
+        for (final c in subjectPalette) dot(value: c, tooltip: 'Color'),
       ],
     );
   }

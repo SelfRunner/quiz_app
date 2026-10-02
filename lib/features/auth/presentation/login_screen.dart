@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../application/auth_validators.dart';
 import 'forgot_password_dialog.dart';
@@ -68,12 +69,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 autofillHints: const [AutofillHints.email],
                 autocorrect: false,
                 validator: AuthValidators.email,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email_outlined),
-                ),
+                decoration: const InputDecoration(labelText: 'Email'),
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               PasswordField(
                 key: const Key('login-password'),
                 controller: _password,
@@ -93,17 +91,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   child: const Text('Forgot password?'),
                 ),
               ),
-              if (_error != null) ...[
-                FormMessage(message: _error!),
-                const SizedBox(height: 16),
-              ],
+              if (_error != null) ...[FormMessage(message: _error!), Gaps.h16],
               LoadingButton(
                 key: const Key('login-submit'),
                 label: 'Sign in',
                 loading: _loading,
                 onPressed: _submit,
               ),
-              const SizedBox(height: 16),
+              Gaps.h16,
               Wrap(
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,

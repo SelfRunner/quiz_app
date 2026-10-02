@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
-/// Centered card layout shared by the auth screens. Full-bleed on phones,
-/// a card on wider screens.
+import '../../../../core/widgets/design_system.dart';
+
+/// Centered, quiet layout shared by the auth screens: full-bleed on phones,
+/// a flat outlined card on wider screens.
 class AuthScaffold extends StatelessWidget {
   const AuthScaffold({
     super.key,
@@ -17,54 +19,69 @@ class AuthScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 600;
-    final content = Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: CircleAvatar(
-              radius: 32,
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: Icon(
-                Icons.school,
-                size: 32,
-                color: theme.colorScheme.onPrimaryContainer,
-              ),
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: colors.card,
+              borderRadius: Radii.mdAll,
+              border: Border.all(color: colors.border),
+            ),
+            child: Icon(
+              Icons.school_outlined,
+              size: 22,
+              color: theme.colorScheme.onSurface,
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
+        ),
+        Gaps.h16,
+        Semantics(
+          header: true,
+          child: Text(
             title,
             style: theme.textTheme.headlineSmall,
             textAlign: TextAlign.center,
           ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              subtitle!,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
+        ),
+        if (subtitle != null) ...[
+          Gaps.h4,
+          Text(
+            subtitle!,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colors.mutedText,
             ),
-          ],
-          const SizedBox(height: 24),
-          child,
+            textAlign: TextAlign.center,
+          ),
         ],
-      ),
+        Gaps.h24,
+        child,
+      ],
     );
     return Scaffold(
-      backgroundColor: wide ? theme.colorScheme.surfaceContainerLow : null,
+      backgroundColor: wide ? colors.sidebar : null,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: const EdgeInsets.symmetric(
+              horizontal: Insets.lg,
+              vertical: Insets.xl,
+            ),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
-              child: wide ? Card(elevation: 1, child: content) : content,
+              constraints: const BoxConstraints(maxWidth: 400),
+              child: wide
+                  ? AppCard(
+                      padding: const EdgeInsets.all(Insets.xxl),
+                      child: content,
+                    )
+                  : content,
             ),
           ),
         ),
@@ -73,7 +90,7 @@ class AuthScaffold extends StatelessWidget {
   }
 }
 
-/// Inline error / info box shown above auth form buttons.
+/// Inline error / info message shown above auth form buttons.
 class FormMessage extends StatelessWidget {
   const FormMessage({super.key, required this.message, this.isError = true});
 
@@ -81,35 +98,13 @@ class FormMessage extends StatelessWidget {
   final bool isError;
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final bg = isError ? scheme.errorContainer : scheme.secondaryContainer;
-    final fg = isError ? scheme.onErrorContainer : scheme.onSecondaryContainer;
-    return Semantics(
-      liveRegion: true,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.info_outline,
-              color: fg,
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message, style: TextStyle(color: fg)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: true,
+    child: InfoBanner(
+      message: message,
+      kind: isError ? InfoBannerKind.error : InfoBannerKind.info,
+    ),
+  );
 }
 
 /// Password field with a show/hide toggle.
@@ -153,7 +148,6 @@ class _PasswordFieldState extends State<PasswordField> {
     decoration: InputDecoration(
       labelText: widget.label,
       helperText: widget.helperText,
-      prefixIcon: const Icon(Icons.lock_outline),
       suffixIcon: IconButton(
         tooltip: _obscure ? 'Show password' : 'Hide password',
         icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
@@ -179,7 +173,7 @@ class LoadingButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FilledButton(
     onPressed: loading ? null : onPressed,
-    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
     child: loading
         ? const SizedBox.square(
             dimension: 20,

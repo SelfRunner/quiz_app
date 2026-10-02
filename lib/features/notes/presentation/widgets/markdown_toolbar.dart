@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/widgets/design_system.dart';
 import '../../application/markdown_editing.dart';
 
 /// Formatting toolbar for a Markdown [TextEditingController]. Image and link
@@ -27,6 +28,7 @@ class MarkdownToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = AppColors.of(context);
     Widget button(
       String key,
       IconData icon,
@@ -36,123 +38,126 @@ class MarkdownToolbar extends StatelessWidget {
       key: Key('md-$key'),
       tooltip: tooltip,
       icon: Icon(icon),
+      iconSize: 18,
+      color: colors.mutedText,
       onPressed: onPressed,
       visualDensity: VisualDensity.compact,
+      style: IconButton.styleFrom(
+        minimumSize: const Size.square(34),
+        shape: const RoundedRectangleBorder(borderRadius: Radii.smAll),
+      ),
     );
 
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainer,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: Row(
-          children: [
-            button(
-              'bold',
-              Icons.format_bold,
-              'Bold (Ctrl+B)',
-              () => _apply(
-                (v) => MarkdownEditing.wrap(v, '**', '**', placeholder: 'bold'),
-              ),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(vertical: Insets.xs),
+      child: Row(
+        children: [
+          button(
+            'bold',
+            Icons.format_bold,
+            'Bold (Ctrl+B)',
+            () => _apply(
+              (v) => MarkdownEditing.wrap(v, '**', '**', placeholder: 'bold'),
             ),
-            button(
-              'italic',
-              Icons.format_italic,
-              'Italic (Ctrl+I)',
-              () => _apply(
-                (v) => MarkdownEditing.wrap(v, '_', '_', placeholder: 'italic'),
-              ),
+          ),
+          button(
+            'italic',
+            Icons.format_italic,
+            'Italic (Ctrl+I)',
+            () => _apply(
+              (v) => MarkdownEditing.wrap(v, '_', '_', placeholder: 'italic'),
             ),
-            button(
-              'strike',
-              Icons.format_strikethrough,
-              'Strikethrough',
-              () => _apply(
-                (v) => MarkdownEditing.wrap(v, '~~', '~~', placeholder: 'text'),
-              ),
+          ),
+          button(
+            'strike',
+            Icons.format_strikethrough,
+            'Strikethrough',
+            () => _apply(
+              (v) => MarkdownEditing.wrap(v, '~~', '~~', placeholder: 'text'),
             ),
-            PopupMenuButton<int>(
-              key: const Key('md-heading'),
-              tooltip: 'Heading',
-              icon: const Icon(Icons.title),
-              onSelected: (level) => _apply(
-                (v) => MarkdownEditing.prefixLines(v, '${'#' * level} '),
-              ),
-              itemBuilder: (_) => [
-                for (var level = 1; level <= 3; level++)
-                  PopupMenuItem(
-                    value: level,
-                    child: Text(
-                      'Heading $level',
-                      style: switch (level) {
-                        1 => Theme.of(context).textTheme.titleLarge,
-                        2 => Theme.of(context).textTheme.titleMedium,
-                        _ => Theme.of(context).textTheme.titleSmall,
-                      },
-                    ),
+          ),
+          PopupMenuButton<int>(
+            key: const Key('md-heading'),
+            tooltip: 'Heading',
+            icon: Icon(Icons.title, size: 18, color: colors.mutedText),
+            onSelected: (level) => _apply(
+              (v) => MarkdownEditing.prefixLines(v, '${'#' * level} '),
+            ),
+            itemBuilder: (_) => [
+              for (var level = 1; level <= 3; level++)
+                PopupMenuItem(
+                  value: level,
+                  child: Text(
+                    'Heading $level',
+                    style: switch (level) {
+                      1 => Theme.of(context).textTheme.titleLarge,
+                      2 => Theme.of(context).textTheme.titleMedium,
+                      _ => Theme.of(context).textTheme.titleSmall,
+                    },
                   ),
-              ],
-            ),
-            const _ToolbarDivider(),
-            button(
-              'bullets',
-              Icons.format_list_bulleted,
-              'Bulleted list',
-              () => _apply((v) => MarkdownEditing.prefixLines(v, '- ')),
-            ),
-            button(
-              'numbers',
-              Icons.format_list_numbered,
-              'Numbered list',
-              () => _apply(
-                (v) => MarkdownEditing.prefixLines(v, '1. ', numbered: true),
-              ),
-            ),
-            button(
-              'checklist',
-              Icons.checklist,
-              'Checklist',
-              () => _apply((v) => MarkdownEditing.prefixLines(v, '- [ ] ')),
-            ),
-            button(
-              'quote',
-              Icons.format_quote,
-              'Quote',
-              () => _apply((v) => MarkdownEditing.prefixLines(v, '> ')),
-            ),
-            const _ToolbarDivider(),
-            button(
-              'code',
-              Icons.code,
-              'Inline code',
-              () => _apply(
-                (v) => MarkdownEditing.wrap(v, '`', '`', placeholder: 'code'),
-              ),
-            ),
-            button(
-              'codeblock',
-              Icons.data_object,
-              'Code block',
-              () => _apply(MarkdownEditing.codeBlock),
-            ),
-            button('link', Icons.link, 'Insert link', onInsertLink),
-            if (imageBusy)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox.square(
-                  dimension: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              )
-            else
-              button(
-                'image',
-                Icons.add_photo_alternate_outlined,
-                'Insert image',
-                onInsertImage,
+            ],
+          ),
+          const _ToolbarDivider(),
+          button(
+            'bullets',
+            Icons.format_list_bulleted,
+            'Bulleted list',
+            () => _apply((v) => MarkdownEditing.prefixLines(v, '- ')),
+          ),
+          button(
+            'numbers',
+            Icons.format_list_numbered,
+            'Numbered list',
+            () => _apply(
+              (v) => MarkdownEditing.prefixLines(v, '1. ', numbered: true),
+            ),
+          ),
+          button(
+            'checklist',
+            Icons.checklist,
+            'Checklist',
+            () => _apply((v) => MarkdownEditing.prefixLines(v, '- [ ] ')),
+          ),
+          button(
+            'quote',
+            Icons.format_quote,
+            'Quote',
+            () => _apply((v) => MarkdownEditing.prefixLines(v, '> ')),
+          ),
+          const _ToolbarDivider(),
+          button(
+            'code',
+            Icons.code,
+            'Inline code',
+            () => _apply(
+              (v) => MarkdownEditing.wrap(v, '`', '`', placeholder: 'code'),
+            ),
+          ),
+          button(
+            'codeblock',
+            Icons.data_object,
+            'Code block',
+            () => _apply(MarkdownEditing.codeBlock),
+          ),
+          button('link', Icons.link, 'Insert link (Ctrl+K)', onInsertLink),
+          if (imageBusy)
+            const Padding(
+              padding: EdgeInsets.all(Insets.sm),
+              child: SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
-          ],
-        ),
+            )
+          else
+            button(
+              'image',
+              Icons.add_photo_alternate_outlined,
+              'Insert image',
+              onInsertImage,
+            ),
+        ],
       ),
     );
   }
@@ -162,8 +167,13 @@ class _ToolbarDivider extends StatelessWidget {
   const _ToolbarDivider();
 
   @override
-  Widget build(BuildContext context) =>
-      const SizedBox(height: 24, child: VerticalDivider(width: 12));
+  Widget build(BuildContext context) => SizedBox(
+    height: 18,
+    child: VerticalDivider(
+      width: Insets.md,
+      color: AppColors.of(context).border,
+    ),
+  );
 }
 
 /// Asks for a link URL and optional label.
