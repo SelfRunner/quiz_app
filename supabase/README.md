@@ -10,8 +10,10 @@ supabase/
   migrations/
     20261002000000_init.sql           tables, triggers, RLS, helpers, RPCs, grants
     20261002000100_storage.sql        note-images bucket + storage.objects policies
+    20261003000000_hardening.sql      confirmed-email sharing, soft-delete hardening
   tests/
-    01_rls.sql  02_rpc.sql  03_storage.sql   pgTAP tests (126 assertions)
+    01_rls.sql  02_rpc.sql  03_storage.sql  04_hardening.sql
+                                      pgTAP tests (171 assertions)
     local_stubs/                      LOCAL VALIDATION ONLY (plain Postgres)
 ```
 
@@ -27,10 +29,18 @@ supabase db push            # applies supabase/migrations in order
 
 **SQL editor (no CLI)**: open the project's SQL editor and run
 `migrations/20261002000000_init.sql`, then `migrations/20261002000100_storage.sql`,
-each as one script, in that order.
+then `migrations/20261003000000_hardening.sql`, each as one script, in that
+order. Projects that already ran the first two only need to run
+`20261003000000_hardening.sql` (it is safe to run more than once).
 
 After applying, in the dashboard:
 - Authentication → Providers → Email: enabled (email/password).
+- Authentication → **"Confirm email" MUST be enabled in production.** Sharing
+  only resolves users whose `auth.users.email_confirmed_at` is set. With
+  confirmation off, GoTrue auto-confirms every signup, so anyone could
+  register someone else's address and receive the shares addressed to it.
+  (Turning it off is fine for local/dev testing: sign-ups are confirmed
+  immediately and sharing works.)
 - API settings: exposed schemas stay `public` (do **not** expose `private`).
 - Realtime is not used (sync is pull-based), so no publication is configured.
 
@@ -107,13 +117,20 @@ Constraints enforced server-side (rejected with SQLSTATE `42501` unless noted):
 - `quiz_attempts.quiz_id` is immutable after insert.
 - Hard-deleting a subject/note/quiz deletes the shares that point at it
   (FK cascades: subject → notes/quizzes → note-attached quizzes → attempts).
+- Soft-deleting one (`deleted_at` null → non-null) also deletes the shares
+  that point at that row. Restoring it (`deleted_at` back to null) does not
+  bring them back. Shares on children (e.g. a note share under a
+  soft-deleted subject) are kept but grant nothing while the parent is
+  deleted.
 
 ## Access rules
 
 `can_read_subject(id)`, `can_read_note(id)`, `can_read_quiz(id)` are
 `SECURITY DEFINER` helpers (`search_path = ''`, executable by `authenticated`
-only). A row is readable when the caller owns it, or holds a share whose
-`owner_id` equals the row's owner and that targets:
+only). A row is readable when the caller owns it (including its own
+soft-deleted rows), or when the row **and every parent** (note → subject;
+quiz → subject and, if note-attached, note) have `deleted_at is null` and the
+caller holds a share whose `owner_id` equals the row's owner and that targets:
 - subject: the subject itself; note: the note or its subject;
   quiz: the quiz, its subject, or (if note-attached) its note.
 
@@ -121,7 +138,7 @@ only). A row is readable when the caller owns it, or holds a share whose
 |---|---|---|
 | subjects / notes / quizzes | owner or `can_read_*` | owner only (`owner_id = auth.uid()` in USING and WITH CHECK) |
 | quiz_attempts | owner only (quiz owners cannot see others' attempts) | owner only; INSERT also needs `can_read_quiz(quiz_id)` |
-| shares | owner or recipient | INSERT: `owner_id = auth.uid()`, recipient ≠ self, caller owns the (non-deleted) resource. DELETE: owner. No UPDATE. |
+| shares | owner or recipient | INSERT: `owner_id = auth.uid()`, recipient ≠ self and has a confirmed email, caller owns the resource and neither it nor a parent is soft-deleted. DELETE: owner. No UPDATE. |
 | profiles | self, or the other party of a share in either direction | UPDATE `display_name` of self |
 | note_image_copies | owner | INSERT (own folder only) / DELETE by owner |
 
@@ -134,12 +151,13 @@ so the migration only enables it and emits a NOTICE.
 
 ### Decisions the Dart data layer must know
 
-1. **Tombstones stay visible to recipients.** Share grants ignore `deleted_at`
-   (both the row's and its parents'), so a recipient's pull sees
-   soft-deleted rows and can remove them locally. Consequence: soft-deleted
-   content stays readable by recipients until it is hard-deleted.
-   New shares can't be created for soft-deleted resources, and `copy_*` skips
-   soft-deleted rows.
+1. **Recipients never see tombstones.** Only owners pull their own
+   soft-deleted rows. For a recipient, a soft-deleted row (or a row under a
+   soft-deleted parent) simply stops being returned, exactly like a revoked
+   share, and soft-deleting a shared resource also deletes its shares. The
+   client removes such rows with the reconciliation in point 2. New shares
+   can't be created for soft-deleted resources, and `copy_*` refuses
+   soft-deleted sources and skips soft-deleted children.
 2. **Revocation is not visible through the `updated_at` cursor.** When a share
    is deleted, the rows simply stop being returned. The client should
    reconcile shared rows (e.g. on each sync, or when `shares` changes, re-list
@@ -167,10 +185,10 @@ so the migration only enables it and emits a NOTICE.
 
 | RPC | Returns | Notes |
 |---|---|---|
-| `find_user_by_email(p_email text)` | `table(id uuid, display_name text, email text)` | Exact, case-insensitive, trimmed match; 0 or 1 row; no wildcards. `email` is an extra column (superset of CONTRACTS.md). |
-| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes, `note_id` remapped) and non-deleted subject-level quizzes. |
-| `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; target subject must be owned by the caller and not deleted. Also copies the note's quizzes. |
-| `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new quiz id) | Needs `can_read_quiz`; target subject owned; target note (optional) owned, not deleted and in the target subject. |
+| `find_user_by_email(p_email text)` | `table(id uuid, display_name text, email text)` | Exact, case-insensitive, trimmed match among users with a confirmed email (`auth.users.email_confirmed_at is not null`); 0 or 1 row; no wildcards. `email` is an extra column (superset of CONTRACTS.md). |
+| `copy_subject(p_subject_id uuid)` | `uuid` (new subject id) | Needs `can_read_subject`; the subject must not be deleted. Copies the subject, its non-deleted notes (with their non-deleted note-attached quizzes, `note_id` remapped) and non-deleted subject-level quizzes. |
+| `copy_note(p_note_id uuid, p_target_subject_id uuid)` | `uuid` (new note id) | Needs `can_read_note`; the note and its subject must not be deleted; target subject must be owned by the caller and not deleted. Also copies the note's non-deleted quizzes. |
+| `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null)` | `uuid` (new quiz id) | Needs `can_read_quiz`; the quiz, its subject and (if any) its note must not be deleted; target subject owned; target note (optional) owned, not deleted and in the target subject. |
 
 All copies are atomic (one transaction), get fresh uuids, `owner_id =
 auth.uid()`, and server timestamps. The `copy_*` functions are
@@ -206,6 +224,30 @@ Bucket `note-images` is private (10 MiB, `image/*`). Object path
   three segments, the second a valid uuid, the note must exist and be owned by
   the first segment (so files someone plants under another user's note id are
   never exposed), and the caller must pass `can_read_note`. Malformed paths
-  return false instead of raising.
+  return false instead of raising. Because `can_read_note` ignores
+  soft-deleted notes (and notes under soft-deleted subjects) for
+  non-owners, recipients lose access to their images at the same time.
 - Uploads are not tied to an existing note row (images may be uploaded before
   the note syncs). Use signed URLs or authenticated downloads to read.
+
+## Hardening migration (`20261003000000_hardening.sql`)
+
+Applied after the two initial migrations (which stay unchanged because they
+are already deployed). Everything is `create or replace` / `drop … if exists`,
+so re-running it is harmless.
+
+1. **Confirmed emails only.** `find_user_by_email` joins `auth.users` and
+   only matches `email_confirmed_at is not null`; the `shares` INSERT policy
+   also requires a confirmed recipient (`private.is_confirmed_user`).
+   Requires "Confirm email" to be enabled in production (see *Applying*).
+2. **No access to soft-deleted content for recipients.** `can_read_subject`,
+   `can_read_note` and `can_read_quiz` grant non-owners access only while
+   the row and all its parents are not soft-deleted; owners keep seeing
+   their own tombstones. Storage reads follow through `can_read_note`.
+   `is_resource_owner` (share creation) also rejects resources under a
+   deleted parent, and `copy_note` / `copy_quiz` refuse sources that are, or
+   sit under, soft-deleted rows (`P0002`).
+3. **Soft delete removes shares.** `AFTER UPDATE OF deleted_at` triggers on
+   `subjects`, `notes`, `quizzes` delete the shares pointing at a row when
+   its `deleted_at` goes from null to non-null. A one-time cleanup deletes
+   existing shares that already point at soft-deleted rows.

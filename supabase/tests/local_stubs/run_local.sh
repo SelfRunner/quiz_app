@@ -16,13 +16,20 @@ db="${QUIZ_TEST_DB:-quiz_app_rls_test}"
 psql -v ON_ERROR_STOP=1 -q -d postgres -c "drop database if exists \"$db\"" -c "create database \"$db\""
 
 psql -v ON_ERROR_STOP=1 -q -d "$db" -f "$here/supabase_stubs.psql"
-for f in "$root"/migrations/*.sql; do
+# Apply every migration in filename (timestamp) order, as `supabase db push` does.
+mapfile -t migrations < <(find "$root/migrations" -maxdepth 1 -name '*.sql' -print | LC_ALL=C sort)
+if [ "${#migrations[@]}" -eq 0 ]; then
+  echo "no migrations found in $root/migrations" >&2
+  exit 1
+fi
+for f in "${migrations[@]}"; do
   echo "applying $(basename "$f")"
   psql -v ON_ERROR_STOP=1 -q -d "$db" -f "$f"
 done
 
 status=0
-for t in "$root"/tests/*.sql; do
+mapfile -t tests < <(find "$root/tests" -maxdepth 1 -name '*.sql' -print | LC_ALL=C sort)
+for t in "${tests[@]}"; do
   echo "== $(basename "$t")"
   if command -v pg_prove >/dev/null 2>&1; then
     pg_prove -d "$db" "$t" || status=1

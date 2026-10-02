@@ -93,7 +93,7 @@ properties required, nullables as `type: [x, 'null']`,
 - `shares(id, owner_id, recipient_id -> profiles, resource_type text check in ('subject','note','quiz'), resource_id uuid, created_at)` unique (resource_type, resource_id, recipient_id).
 - `owner_id` defaults to `auth.uid()`; `updated_at` is set by a trigger (`now()`) on insert/update and drives the sync cursor; client-provided `id` and `created_at` are accepted.
 - RPCs (`lib/data/remote/supabase_api.dart` `SupabaseRpc`):
-  `find_user_by_email(p_email text) returns table(id uuid, display_name text, email text)`;
+  `find_user_by_email(p_email text) returns table(id uuid, display_name text, email text)` (confirmed-email users only; shares to unconfirmed users are rejected with `42501`);
   `copy_subject(p_subject_id uuid) returns uuid`;
   `copy_note(p_note_id uuid, p_target_subject_id uuid) returns uuid`;
   `copy_quiz(p_quiz_id uuid, p_target_subject_id uuid, p_target_note_id uuid default null) returns uuid`.
@@ -373,7 +373,10 @@ best-effort final push.
 - Merge = last-write-wins: a pulled row replaces the local one unless the
   outbox still has an op for that row. Other users' tombstones are purged
   locally; own tombstones are kept (hidden from streams); unknown tombstones
-  are ignored. The server may normalize rows (e.g. `quiz.subject_id` follows
+  are ignored. The server never returns other users' tombstones: for a
+  recipient, a soft-deleted row (or one under a soft-deleted parent) just
+  stops being visible and soft-deleting a shared resource deletes its shares,
+  so such rows are removed by the reconciliation below. The server may normalize rows (e.g. `quiz.subject_id` follows
   its note); the next pull corrects the local copy.
 - Shares: each sync lists `shares` where `recipient_id = me`. A new share ->
   targeted fetch without cursor (subject: the subject + notes/quizzes by

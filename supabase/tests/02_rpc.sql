@@ -3,10 +3,10 @@ begin;
 create extension if not exists pgtap with schema extensions;
 select plan(35);
 
-insert into auth.users (id, email, raw_user_meta_data) values
-  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{"display_name":"Alice"}'),
-  ('22222222-2222-4222-8222-222222222222', 'Bob@Example.com',   '{"display_name":"Bob"}'),
-  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}');
+insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values
+  ('11111111-1111-4111-8111-111111111111', 'alice@example.com', '{"display_name":"Alice"}', now()),
+  ('22222222-2222-4222-8222-222222222222', 'Bob@Example.com',   '{"display_name":"Bob"}', now()),
+  ('33333333-3333-4333-8333-333333333333', 'carol@example.com', '{}', now());
 
 -- Fixture owned by A: S1 { N1 (with image) + QN1, N2 (deleted) + QN2, Q1 }
 set local role authenticated;
