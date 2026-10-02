@@ -13,6 +13,12 @@ LocalImageCache createPlatformImageCache(Box<Uint8List> webBox) =>
       return Directory(p.join(base.path, 'note_images'));
     });
 
+LocalImageCache createPlatformAttachmentCache(LazyBox<Uint8List> webBox) =>
+    FileImageCache(() async {
+      final base = await getApplicationSupportDirectory();
+      return Directory(p.join(base.path, 'attachments'));
+    });
+
 /// [LocalImageCache] storing one file per image under a root directory,
 /// mirroring the storage path (`root/{owner}/{note}/{file}`).
 class FileImageCache implements LocalImageCache {

@@ -2,6 +2,7 @@
 library;
 
 export 'app_user.dart';
+export 'attachment.dart';
 export 'drafts.dart';
 export 'note.dart';
 export 'note_image_ref.dart';

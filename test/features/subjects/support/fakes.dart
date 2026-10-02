@@ -191,6 +191,10 @@ class FakeNoteRepository implements NoteRepository {
   );
 
   @override
+  Stream<List<Note>> watchAllAccessible() =>
+      _t.watch(() => _t.rows.values.toList());
+
+  @override
   Stream<Note?> watchById(String id) => _t.watch(() => _t.rows[id]);
 
   @override

@@ -75,7 +75,11 @@ class DefaultSyncEngine implements SyncEngine {
     this.pullLookback = const Duration(seconds: 5),
     this.maxAttempts = 8,
     this.maxRetryDelay = const Duration(minutes: 5),
-  }) : imageCopies = NoteImageCopyProcessor(imageRemote, db.images) {
+  }) : imageCopies = NoteImageCopyProcessor(
+         imageRemote,
+         db.images,
+         attachmentCache: db.attachmentFiles,
+       ) {
     _rejectedCount = db.meta.rejectedChanges.length;
     _status = SyncStatus(
       lastSyncedAt: db.meta.lastSyncedAt,
@@ -521,6 +525,9 @@ class DefaultSyncEngine implements SyncEngine {
       case OutboxOpType.upsert:
         final payload = op.payload;
         if (payload == null) break;
+        if (op.table == SyncTables.attachments) {
+          _ensureAttachmentUploaded(payload);
+        }
         final row = await remote.upsert(op.table, payload);
         _checkActive(gen);
         final removed = await db.outbox.complete(op);
@@ -541,12 +548,57 @@ class DefaultSyncEngine implements SyncEngine {
         }
       case OutboxOpType.deleteImage:
         await imageRemote.removeImages([op.rowId]);
+      case OutboxOpType.uploadAttachment:
+        final bytes = await db.attachmentFiles.read(op.rowId);
+        // Bytes gone (e.g. deleted meanwhile): nothing left to upload.
+        if (bytes != null) {
+          await db.transfers.track(
+            op.rowId,
+            () => imageRemote.uploadImage(
+              op.rowId,
+              bytes,
+              contentType: op.payload?['content_type'] as String?,
+              bucket: SyncTables.attachmentsBucket,
+            ),
+          );
+        }
+      case OutboxOpType.deleteAttachment:
+        final id = op.payload?['attachment_id'] as String?;
+        if (id != null && db.outbox.hasPendingFor(SyncTables.attachments, id)) {
+          // The tombstone must reach the server before the blob goes away.
+          throw const RemoteException(
+            RemoteErrorKind.dependency,
+            'Waiting for the file deletion to be saved.',
+          );
+        }
+        await imageRemote.removeImages([
+          op.rowId,
+        ], bucket: SyncTables.attachmentsBucket);
       case OutboxOpType.delete:
         // Reserved: entities use soft deletes (upserts with deleted_at).
         break;
     }
     _checkActive(gen);
     await db.outbox.complete(op);
+  }
+
+  /// An attachment row is pushed only after its blob upload (queued before
+  /// it) has completed, so recipients rarely see a row without a blob.
+  void _ensureAttachmentUploaded(Map<String, dynamic> payload) {
+    if (payload['deleted_at'] != null) return;
+    final path = payload['storage_path'];
+    if (path is! String) return;
+    if (db.outbox.pendingFor(
+          SyncTables.attachmentsBucket,
+          path,
+          op: OutboxOpType.uploadAttachment,
+        ) !=
+        null) {
+      throw const RemoteException(
+        RemoteErrorKind.dependency,
+        'Waiting for the file upload to finish.',
+      );
+    }
   }
 
   Future<void> _reject(
@@ -557,13 +609,18 @@ class DefaultSyncEngine implements SyncEngine {
   ) async {
     _checkActive(gen);
     await db.outbox.drop(op.id);
-    final what = switch (op.table) {
-      SyncTables.subjects => 'a subject',
-      SyncTables.notes => 'a note',
-      SyncTables.quizzes => 'a quiz',
-      SyncTables.quizAttempts => 'a quiz attempt',
-      SyncTables.noteImagesBucket => 'an image',
-      _ => 'an item',
+    final what = switch (op.op) {
+      OutboxOpType.uploadAttachment ||
+      OutboxOpType.deleteAttachment => 'a file upload',
+      OutboxOpType.uploadImage || OutboxOpType.deleteImage => 'an image',
+      _ => switch (op.table) {
+        SyncTables.subjects => 'a subject',
+        SyncTables.notes => 'a note',
+        SyncTables.quizzes => 'a quiz',
+        SyncTables.quizAttempts => 'a quiz attempt',
+        SyncTables.attachments => 'a file',
+        _ => 'an item',
+      },
     };
     final message = 'The server rejected a change to $what: ${e.message}';
     problems.add(message);
@@ -665,6 +722,8 @@ class DefaultSyncEngine implements SyncEngine {
     var pending = pendingIds();
     final puts = <String, String>{};
     final removes = <String>[];
+    // Blobs of attachments that became tombstones / were purged.
+    final deadBlobs = <String>[];
     for (final json in rows) {
       final id = json['id'];
       if (id is! String || pending.contains(id)) continue;
@@ -677,6 +736,7 @@ class DefaultSyncEngine implements SyncEngine {
       if (row.isDeleted) {
         // Unknown tombstones carry no information for this device.
         if (table.raw(id) == null) continue;
+        if (row is Attachment) deadBlobs.add(row.storagePath);
         // Other users' tombstones are purged; own ones are kept.
         if (!row.isOwnedBy(userId)) {
           removes.add(id);
@@ -692,6 +752,17 @@ class DefaultSyncEngine implements SyncEngine {
     puts.removeWhere((id, _) => pending.contains(id));
     if (puts.isNotEmpty) await table.box.putAll(puts);
     if (removes.isNotEmpty) await table.removeAll(removes);
+    await _removeBlobs(deadBlobs);
+  }
+
+  Future<void> _removeBlobs(List<String> paths) async {
+    for (final path in paths) {
+      try {
+        await db.attachmentFiles.remove(path);
+      } catch (_) {
+        // Best effort: a stale cache entry is only wasted space.
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -762,6 +833,7 @@ class DefaultSyncEngine implements SyncEngine {
         await byId(db.subjects);
         await where(db.notes, 'subject_id');
         await where(db.quizzes, 'subject_id');
+        await where(db.attachments, 'subject_id');
       case ShareResourceType.note:
         await byId(db.notes);
         await where(db.quizzes, 'note_id');
@@ -775,7 +847,7 @@ class DefaultSyncEngine implements SyncEngine {
   /// tombstone hidden by RLS). Public for tests and manual refresh.
   Future<void> reconcileForeignRows({required String userId, int? gen}) async {
     final g = gen ?? _generation;
-    for (final table in [db.subjects, db.notes, db.quizzes]) {
+    for (final table in [db.subjects, db.notes, db.quizzes, db.attachments]) {
       final foreign = [
         for (final row in table.all())
           if (!row.isOwnedBy(userId)) row,
@@ -801,6 +873,10 @@ class DefaultSyncEngine implements SyncEngine {
             await db.images.removePrefix('${note.ownerId}/${note.id}/');
           }
         }
+        await _removeBlobs([
+          for (final r in gone)
+            if (r is Attachment) r.storagePath,
+        ]);
       }
     }
     await db.meta.setLastReconciledAt(_clock());

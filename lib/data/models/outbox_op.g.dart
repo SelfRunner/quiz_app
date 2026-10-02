@@ -33,4 +33,6 @@ const _$OutboxOpTypeEnumMap = {
   OutboxOpType.delete: 'delete',
   OutboxOpType.uploadImage: 'upload_image',
   OutboxOpType.deleteImage: 'delete_image',
+  OutboxOpType.uploadAttachment: 'upload_attachment',
+  OutboxOpType.deleteAttachment: 'delete_attachment',
 };

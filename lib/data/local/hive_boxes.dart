@@ -16,6 +16,7 @@ abstract final class HiveBoxes {
   static const String notes = 'notes';
   static const String quizzes = 'quizzes';
   static const String quizAttempts = 'quiz_attempts';
+  static const String attachments = 'attachments';
 
   /// `OutboxOp` JSON keyed by op id; process in `createdAt` order.
   static const String outbox = 'outbox';
@@ -33,6 +34,11 @@ abstract final class HiveBoxes {
   /// as files under the app support directory instead.
   static const String noteImageBytes = 'note_image_bytes';
 
+  /// Attachment bytes keyed by storage path (`LazyBox<Uint8List>`, values
+  /// are read on demand). The attachment cache on web; native platforms use
+  /// files under the app support directory instead.
+  static const String attachmentBytes = 'attachment_bytes';
+
   /// Boxes holding user-scoped data, cleared on sign-out / account switch.
   /// [prefs] is device-scoped and survives sign-out.
   static const List<String> userScopedStringBoxes = [
@@ -40,6 +46,7 @@ abstract final class HiveBoxes {
     notes,
     quizzes,
     quizAttempts,
+    attachments,
     outbox,
     syncMeta,
   ];
@@ -49,6 +56,7 @@ abstract final class HiveBoxes {
     notes,
     quizzes,
     quizAttempts,
+    attachments,
     outbox,
     syncMeta,
     prefs,
@@ -63,6 +71,7 @@ abstract final class HiveBoxes {
       await Hive.openBox<String>(name);
     }
     await Hive.openBox<Uint8List>(noteImageBytes);
+    await Hive.openLazyBox<Uint8List>(attachmentBytes);
   }
 
   /// Hook for TypeAdapter registration. Intentionally empty: all models are
@@ -77,5 +86,6 @@ abstract final class HiveBoxes {
       await Hive.box<String>(name).clear();
     }
     await Hive.box<Uint8List>(noteImageBytes).clear();
+    await Hive.lazyBox<Uint8List>(attachmentBytes).clear();
   }
 }

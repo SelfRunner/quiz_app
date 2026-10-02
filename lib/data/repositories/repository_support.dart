@@ -90,6 +90,43 @@ class DataContext {
   }
 }
 
+extension AttachmentDeletion on DataContext {
+  /// Soft-deletes [attachment] (tombstone upsert), then queues removal of
+  /// its blob (after the tombstone in the FIFO outbox) and drops the local
+  /// bytes and any pending upload.
+  Future<void> deleteAttachment(Attachment attachment, {DateTime? now}) async {
+    final at = now ?? clock();
+    final path = attachment.storagePath;
+    await db.outbox.removeFor(
+      SyncTables.attachmentsBucket,
+      path,
+      OutboxOpType.uploadAttachment,
+    );
+    await save(
+      db.attachments,
+      attachment.copyWith(deletedAt: at, updatedAt: at),
+    );
+    if (db.outbox.pendingFor(
+          SyncTables.attachmentsBucket,
+          path,
+          op: OutboxOpType.deleteAttachment,
+        ) ==
+        null) {
+      await db.outbox.enqueue(
+        table: SyncTables.attachmentsBucket,
+        op: OutboxOpType.deleteAttachment,
+        rowId: path,
+        payload: {'attachment_id': attachment.id},
+      );
+    }
+    try {
+      await db.attachmentFiles.remove(path);
+    } catch (_) {
+      // Best effort: a stale cache entry is only wasted space.
+    }
+  }
+}
+
 /// `note-image://` references in a Markdown body (deduplicated, in order).
 List<NoteImageRef> noteImageRefsIn(String markdown) {
   final seen = <NoteImageRef>{};
@@ -106,7 +143,8 @@ final RegExp _noteImagePattern = RegExp(
 
 /// Soft-delete cascades (tombstones are upserted through the outbox).
 ///
-/// - subject -> its notes (and their quizzes/images) and its quizzes
+/// - subject -> its notes (and their quizzes/images), its quizzes and its
+///   attachments (and their blobs)
 /// - note -> quizzes attached to it, images owned by the user in it
 class CascadeDeleter {
   CascadeDeleter(this.ctx);
@@ -121,6 +159,11 @@ class CascadeDeleter {
     }
     for (final quiz in _db.quizzes.where((q) => q.subjectId == subject.id)) {
       if (quiz.isOwnedBy(userId)) await deleteQuiz(quiz, now: now);
+    }
+    for (final file in _db.attachments.where(
+      (a) => a.subjectId == subject.id,
+    )) {
+      if (file.isOwnedBy(userId)) await ctx.deleteAttachment(file, now: now);
     }
     await ctx.save(
       _db.subjects,

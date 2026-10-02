@@ -20,6 +20,10 @@ class LocalNoteRepository implements NoteRepository {
   }
 
   @override
+  Stream<List<Note>> watchAllAccessible() =>
+      _ctx.db.notes.watchWhere((_) => true, compare: _byUpdatedDesc);
+
+  @override
   Stream<Note?> watchById(String id) => _ctx.db.notes.watchById(id);
 
   @override

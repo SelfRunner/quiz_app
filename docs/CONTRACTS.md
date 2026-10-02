@@ -68,8 +68,10 @@ JSON keys are snake_case versions of the field names. `?` = nullable.
 | `Share` | `id, ownerId, recipientId, resourceType (ShareResourceType), resourceId, createdAt`; read-only joins (not in `toJson`): `recipient? (Profile), owner? (Profile), resourceTitle?` |
 | `ShareResourceType` | `subject`, `note`, `quiz` (JSON = name) |
 | `OutboxOp` | `id, table (String), op (OutboxOpType), rowId, payload? (Map), createdAt, attempts (default 0), lastError?` |
-| `OutboxOpType` | `upsert`, `delete` (hard delete, reserved), `uploadImage 'upload_image'`, `deleteImage 'delete_image'` |
-| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, noteImagesBucket='note-images'`; `synced` = [subjects, notes, quizzes, quiz_attempts] |
+| `OutboxOpType` | `upsert`, `delete` (hard delete, reserved), `uploadImage 'upload_image'`, `deleteImage 'delete_image'`, `uploadAttachment 'upload_attachment'`, `deleteAttachment 'delete_attachment'` |
+| `SyncTables` | `subjects, notes, quizzes, quizAttempts='quiz_attempts', shares, profiles, attachments, noteImagesBucket='note-images', attachmentsBucket='attachments'`; `synced` = [subjects, notes, quizzes, quiz_attempts, attachments] |
+| `Attachment` : Syncable | `id, subjectId, ownerId, name, mimeType?, sizeBytes (default 0), kind (AttachmentKind, default other), storagePath, extractedText?, createdAt, updatedAt, deletedAt?`; `fileName` (last path segment); statics `maxSizeBytes` (50 MiB), `maxExtractedTextLength` (200 000), `maxNameLength` (512), `buildStoragePath(...)`, `sanitizeFileName(name)` |
+| `AttachmentKind` | `pdf, image, text, docx, audio, video, other` (JSON = name, unknown -> other); `AttachmentKind.detect(fileName:, mimeType?)` (extension first, then MIME). Top-level helpers `fileExtension(name)`, `mimeTypeForFileName(name)` |
 | `NoteImageRef` (plain) | `ownerId, noteId, fileName`; `storagePath = '{owner}/{note}/{file}'`, `markdownUrl = 'note-image://{storagePath}'`, `tryParse(String)` |
 | `QuestionDraft` | as `Question` without `id`; `toQuestion(id)` |
 | `QuizDraft` | `title, description?, questions (List<QuestionDraft>)`; `toQuestions(newId)` |
@@ -195,8 +197,10 @@ TypeAdapters, so model changes never need Hive type-id migrations. Boxes:
 id, FIFO by `createdAt`), `sync_meta` (cursors e.g. `cursor:{table}`), `prefs`
 (non-secret prefs). `HiveBoxes.clearAll()` on sign-out. The data agent may add
 boxes (e.g. image bytes cache) in `init()`. Added: `note_image_bytes`
-(`Box<Uint8List>`, web image cache); sign-out clearing is done by the sync
-engine (see Data layer notes).
+(`Box<Uint8List>`, web image cache), `attachments` (`Box<String>`, user
+scoped) and `attachment_bytes` (`LazyBox<Uint8List>`, web attachment cache;
+native uses files under `{app support}/attachments`); sign-out clearing is
+done by the sync engine (see Data layer notes).
 
 ## Interfaces
 
@@ -228,6 +232,7 @@ abstract interface class SubjectRepository {
 
 abstract interface class NoteRepository {
   Stream<List<Note>> watchBySubject(String subjectId);   // updatedAt desc
+  Stream<List<Note>> watchAllAccessible();     // own + shared, live, updatedAt desc (note picker; added Wave 1)
   Stream<Note?> watchById(String id);
   Future<Note?> getById(String id);
   Future<Note> create({required String subjectId, required String title, String contentMd = ''});
@@ -264,6 +269,24 @@ abstract interface class ShareRepository {    // online-only (sharedWithMe: offl
   Future<String> copyToMyAccount({required ShareResourceType resourceType, required String resourceId,
       String? targetSubjectId, String? targetNoteId});   // returns new id, triggers sync
 }
+
+abstract interface class AttachmentRepository {   // added Wave 1, see "Attachments (client)"
+  static const int maxSizeBytes;                 // 50 MiB
+  Stream<List<Attachment>> watchBySubject(String subjectId);   // own or shared, newest first
+  Stream<List<Attachment>> watchAllAccessible();               // own + shared subjects (pickers)
+  Stream<Attachment?> watchById(String id);
+  Future<Attachment?> getById(String id);
+  Future<Attachment> add({required String subjectId, required String name, String? mimeType,
+      required Uint8List bytes, String? extractedText});
+  Future<Attachment> update(Attachment a);       // name, mimeType, kind, extractedText only
+  Future<Attachment> rename(String id, String name);
+  Future<void> delete(String id);                // soft; blob removed after the tombstone is pushed
+  Future<Uint8List> getBytes(Attachment a);      // local cache, else download (throws)
+  Future<bool> isCached(Attachment a);
+  Stream<AttachmentUploadState> watchUpload(Attachment a);
+}
+// AttachmentUploadState { AttachmentUploadPhase phase (queued|uploading|retrying|done);
+//   String? error; int attempts; bool isPending }
 
 abstract interface class ImageStore {
   Future<NoteImageRef> saveNoteImage({required String noteId, required Uint8List bytes, required String extension});
@@ -365,6 +388,13 @@ should resolve the provider/model before calling so it knows what was used.
 | `sharedWithMeProvider` | same | `FutureProvider.autoDispose<List<Share>>` |
 | `sharesForResourceProvider((type: t, id: id))` | same | `FutureProvider.autoDispose.family<List<Share>, ({ShareResourceType type, String id})>` |
 | `syncStatusProvider` | same | `StreamProvider<SyncStatus>` |
+| `attachmentRepositoryProvider` | same | `Provider<AttachmentRepository>` |
+| `attachmentsForSubjectProvider(subjectId)` | same | `StreamProvider.autoDispose.family<List<Attachment>, String>` |
+| `accessibleAttachmentsProvider` | same | `StreamProvider.autoDispose<List<Attachment>>` (own + shared subjects) |
+| `attachmentProvider(id)` | same | `StreamProvider.autoDispose.family<Attachment?, String>` |
+| `attachmentUploadProvider(attachmentId)` | same | `StreamProvider.autoDispose.family<AttachmentUploadState, String>` |
+| `accessibleNotesProvider` | same | `StreamProvider.autoDispose<List<Note>>` (own + shared, updatedAt desc) |
+| `noteSearchProvider(query)` | same | `Provider.autoDispose.family<AsyncValue<List<Note>>, String>` (filtered `accessibleNotesProvider`) |
 | `apiKeyStoreProvider`, `llmProviderFactoryProvider`, `transcriptServiceProvider`, `aiServiceProvider` | `lib/ai/ai_providers.dart` | `Provider<...>` (implemented) |
 | `aiHttpClientProvider` | `lib/ai/ai_providers.dart` | `Provider<http.Client>` (override with `MockClient` in tests) |
 
@@ -462,8 +492,9 @@ user signs back in.
   408/429) -> retried with capped backoff, never dropped (FK-blocked ops are
   not counted while other ops fail transiently).
 - After push, pending `note_image_copies` rows are processed (Storage copy
-  `from_path` -> `to_path`, then the row is deleted; also deleted when the
-  source is gone/unreadable or the target exists).
+  `from_path` -> `to_path` within the row's `bucket`, then the row is
+  deleted; also deleted when the source is gone/unreadable or the target
+  exists).
 - Pull: per table, keyset pages `(updated_at, id) > cursor` ascending, 500
   rows. Cursor = raw server `updated_at` string + id of the last row
   (`sync_meta` `cursor:{table}`), never the client clock; each sync starts
@@ -478,8 +509,8 @@ user signs back in.
   so such rows are removed by the reconciliation below. The server may normalize rows (e.g. `quiz.subject_id` follows
   its note); the next pull corrects the local copy.
 - Shares: each sync lists `shares` where `recipient_id = me`. A new share ->
-  targeted fetch without cursor (subject: the subject + notes/quizzes by
-  `subject_id`; note: the note + quizzes by `note_id`; quiz: the quiz). A
+  targeted fetch without cursor (subject: the subject + notes/quizzes/
+  attachments by `subject_id`; note: the note + quizzes by `note_id`; quiz: the quiz). A
   revoked share (or every 30 min) -> reconciliation: ids of locally cached
   rows owned by others are checked with `select id where id in (...)` and
   rows no longer visible are purged (plus their cached images).
@@ -489,7 +520,7 @@ UUID, `createdAt/updatedAt` = now (server overwrites `updated_at`), then
 enqueue + write Hive. Non-owned rows -> `PermissionDeniedException` (also
 creating notes/quizzes under a shared subject/note). Deletes are soft and
 cascade locally: subject -> notes (+ their quizzes and own images) and
-quizzes; note -> its quizzes + own images. A quiz with `noteId` must use the
+quizzes and attachments (+ blobs); note -> its quizzes + own images. A quiz with `noteId` must use the
 note's subject (`ValidationException` otherwise); moving a note moves its
 quizzes. Attempts are always owned by the taker (allowed on shared quizzes).
 Signed out -> `AppAuthException`.
@@ -526,6 +557,59 @@ stores bytes locally (files under app support dir on native, Hive box
 downloaded and cached; null = unavailable/offline). `LocalImageStore
 .signedUrl(ref)` gives a 1 h signed URL if a network URL is needed.
 `ImageStore.delete` removes the local copy and queues `delete_image`.
+
+**Attachments (client, Wave 1).** Protocol: *Attachments* above.
+- Add: `ref.read(attachmentRepositoryProvider).add(subjectId:, name:
+  originalFileName, mimeType: picked?.mimeType, bytes:, extractedText:
+  textFromTextExtractor)` (owned subject only; works offline). The name's
+  extension drives `kind` (`AttachmentKind.detect`); `mimeType` defaults to
+  `mimeTypeForFileName(name)`. `extractedText` is supplied by the caller
+  (the data layer never depends on `lib/ai`) and truncated to 200 000 chars.
+  Errors: `ValidationException` (empty, > 50 MB: message names the file and
+  the limit), `PermissionDeniedException` (shared subject),
+  `NotFoundException` (missing subject), `StorageException` (local write).
+- Pipeline: bytes are written to the local attachment cache (files under
+  `{app support}/attachments/{storage path}` on native, lazy Hive box
+  `attachment_bytes` on web), then the outbox gets `upload_attachment`
+  (rowId = storage path) **before** the row upsert. The engine uploads to
+  bucket `attachments` (`upsert: true`, content type from the row) and does
+  not push an attachment row while its upload op is pending (treated like
+  an FK wait), so recipients never see a row before its blob unless the
+  upload was rejected. Byte-level progress is not available from the Storage
+  client: `watchUpload` / `attachmentUploadProvider(id)` report `queued`
+  (waiting/offline) -> `uploading` (request in flight) -> `retrying` (last
+  attempt failed, retried automatically) -> `done`.
+- Delete (owner only): tombstone upsert first, then `delete_attachment`
+  (Storage `remove`), which waits while the tombstone is still queued; local
+  bytes and a not-yet-run upload are dropped immediately (an offline add +
+  delete never uploads). Soft-deleting a subject cascades to its own
+  attachments + blobs.
+- Read: `getBytes(a)` = local cache, else download (cached afterwards; one
+  download per path at a time). Throws `NetworkException` (offline, not
+  cached), `NotFoundException` (403/404: revoked, deleted, not uploaded or
+  copied yet), `AppAuthException`, `UnknownException` (5xx). `isCached(a)`
+  for an "available offline" hint. Shared attachments are read-only
+  (`update`/`rename`/`delete` -> `PermissionDeniedException`); UI checks
+  `a.isOwnedBy(currentUserId)`.
+- Sync: `attachments` is pulled like the other tables (keyset cursor). A new
+  **subject** share also fetches `attachments` by `subject_id`;
+  reconciliation covers attachments (revoked rows + their cached bytes are
+  purged); own tombstones pulled from other devices drop the cached bytes.
+- Copy queue: `NoteImageCopyProcessor` selects `id, bucket, from_path,
+  to_path` and calls `storage.from(bucket).copy(...)` (missing bucket =
+  `note-images`), copying cached bytes in that bucket's local cache.
+- **CDN cache busting**: every Storage download (note images and
+  attachments) adds a unique `cacheNonce` query parameter, because the
+  Storage CDN caches authenticated GETs by URL + token and would keep
+  serving users whose access was revoked.
+
+**Note picker (Wave 1).** `accessibleNotesProvider` (own + shared notes, live,
+`updatedAt` desc) and `noteSearchProvider(query)` (or
+`searchNotes(notes, query)` from `lib/data/repositories/note_search.dart`):
+case-insensitive, every whitespace-separated term must occur in title or
+content, title matches first, empty query = all; lowercased text is
+memoized per note so per-keystroke filtering of thousands of notes is cheap.
+Shared notes have `ownerId != currentUserId`.
 
 **Errors** (all `AppException`, `message` is user-safe): `AppAuthException`
 (signed out / session expired), `PermissionDeniedException` (read-only shared
