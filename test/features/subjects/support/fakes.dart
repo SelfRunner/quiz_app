@@ -304,6 +304,7 @@ class FakeApiKeyStore implements ApiKeyStore {
   final Map<LlmProviderId, String> baseUrls = {};
   final Map<LlmProviderId, Map<String, String>> headers = {};
   LlmProviderId? selected;
+  final Map<(LlmProviderId, String), Set<AiInputKind>> inputOverrides = {};
 
   @override
   Future<String?> getApiKey(LlmProviderId provider) async => keys[provider];
@@ -360,6 +361,25 @@ class FakeApiKeyStore implements ApiKeyStore {
   ) async => headers[provider] = value;
 
   @override
+  Future<Set<AiInputKind>> getInputOverride(
+    LlmProviderId provider,
+    String model,
+  ) async => inputOverrides[(provider, model)] ?? const {};
+
+  @override
+  Future<void> setInputOverride(
+    LlmProviderId provider,
+    String model,
+    Set<AiInputKind> kinds,
+  ) async {
+    if (kinds.isEmpty) {
+      inputOverrides.remove((provider, model));
+    } else {
+      inputOverrides[(provider, model)] = {...kinds};
+    }
+  }
+
+  @override
   Future<Set<LlmProviderId>> configuredProviders() async => keys.keys.toSet();
 
   final List<String> clearedUsers = [];
@@ -369,6 +389,7 @@ class FakeApiKeyStore implements ApiKeyStore {
     models.clear();
     baseUrls.clear();
     headers.clear();
+    inputOverrides.clear();
     selected = null;
   }
 
@@ -422,6 +443,13 @@ class FakeAiService implements AiService {
   @override
   Future<NoteDraft> generateNote(NoteGenerationRequest request) =>
       throw UnimplementedError();
+
+  @override
+  Future<T> generateStructured<T>(
+    StructuredGenerationRequest request, {
+    required DraftValidation<T> Function(Map<String, dynamic> json) validate,
+    String what = 'result',
+  }) => throw UnimplementedError();
 }
 
 /// Bundle of fakes + the matching provider overrides.

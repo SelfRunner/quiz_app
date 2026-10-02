@@ -127,7 +127,7 @@ void main() {
     expect(r.capabilities.image, isFalse);
 
     // Manual override "supports images/PDF" is stored and applied.
-    await (s as AiCapabilityOverrideStore).setInputOverride(
+    await s.setInputOverride(
       LlmProviderId.openaiCompatible,
       'llava',
       {AiInputKind.image},

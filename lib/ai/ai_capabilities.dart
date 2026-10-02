@@ -166,10 +166,10 @@ class AiCapabilities {
       '${youtubeNative ? ', youtubeNative' : ''})';
 }
 
-/// Optional extension of `ApiKeyStore` holding the per-model manual override
-/// "this model supports images / PDF" for OpenAI-compatible endpoints whose
-/// capabilities cannot be detected. Implemented by `SecureApiKeyStore` and
-/// the notifying wrapper used by `apiKeyStoreProvider`.
+/// The per-model manual override "this model supports images / PDF" for
+/// OpenAI-compatible endpoints whose capabilities cannot be detected. Every
+/// `ApiKeyStore` implements it (the methods are part of that interface), so
+/// call them on the store directly.
 abstract interface class AiCapabilityOverrideStore {
   /// Extra input kinds the user enabled for [model] (empty when none).
   Future<Set<AiInputKind>> getInputOverride(

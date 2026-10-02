@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/errors/app_exception.dart';
-import 'ai_capabilities.dart';
 import 'ai_source.dart';
 import 'api_key_store.dart';
 import 'base_url_policy.dart';
@@ -94,7 +93,7 @@ class InMemoryKeyValueStore implements SecureKeyValueStore {
 /// Migration: entries written before namespacing (`ai.<entry>`) are moved to
 /// the first signed-in user that uses a store (existing values of that user
 /// win), then deleted, so later users never see them.
-class SecureApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
+class SecureApiKeyStore implements ApiKeyStore {
   SecureApiKeyStore({required this.userId, SecureKeyValueStore? backend})
     : _kv = backend ?? FlutterSecureKeyValueStore();
 

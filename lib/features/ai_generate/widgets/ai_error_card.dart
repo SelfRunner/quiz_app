@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../core/widgets/info_banner.dart';
 
 /// A generation error translated for people, with the actions that help.
 class FriendlyAiError {
@@ -50,6 +51,16 @@ FriendlyAiError describeAiError(Object error) {
         hint:
             'Wait a minute and try again, or check the quota/credits of '
             'your plan with the provider.',
+      );
+    case AiException(kind: AiErrorKind.unsupported):
+      return FriendlyAiError(
+        title: "This model can't use one of the sources",
+        message: error.message,
+        hint:
+            'Remove that source, or switch to a model that supports it in '
+            'Settings.',
+        openSettings: true,
+        canRetry: false,
       );
     case AiException(kind: AiErrorKind.invalidOutput):
       return FriendlyAiError(
@@ -118,87 +129,29 @@ class AiErrorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final info = describeAiError(error);
-    return Card(
-      key: const Key('ai-error'),
-      color: scheme.errorContainer,
-      elevation: 0,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Icon(
-                    Icons.error_outline,
-                    color: scheme.onErrorContainer,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        info.title,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: scheme.onErrorContainer,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        info.message,
-                        style: TextStyle(color: scheme.onErrorContainer),
-                      ),
-                      if (info.hint != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          info.hint!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.onErrorContainer,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                if (onDismiss != null)
-                  IconButton(
-                    tooltip: 'Dismiss',
-                    icon: Icon(Icons.close, color: scheme.onErrorContainer),
-                    onPressed: onDismiss,
-                  ),
-              ],
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  if (info.openSettings && onOpenSettings != null)
-                    TextButton.icon(
-                      onPressed: onOpenSettings,
-                      icon: const Icon(Icons.settings_outlined),
-                      label: const Text('Open settings'),
-                    ),
-                  if (info.canRetry && onRetry != null)
-                    FilledButton.tonalIcon(
-                      onPressed: onRetry,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Try again'),
-                    ),
-                ],
-              ),
-            ),
-          ],
+    final actions = [
+      if (info.openSettings && onOpenSettings != null)
+        TextButton(
+          onPressed: onOpenSettings,
+          child: const Text('Open settings'),
         ),
-      ),
+      if (info.canRetry && onRetry != null)
+        TextButton(onPressed: onRetry, child: const Text('Try again')),
+    ];
+    return InfoBanner(
+      key: const Key('ai-error'),
+      kind: InfoBannerKind.error,
+      title: info.title,
+      message: [info.message, ?info.hint].join('\n'),
+      onDismiss: onDismiss,
+      action: actions.isEmpty
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: actions,
+            ),
     );
   }
 }

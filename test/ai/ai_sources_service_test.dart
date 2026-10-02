@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:quiz_app/ai/ai_capabilities.dart';
 import 'package:quiz_app/ai/ai_service.dart';
 import 'package:quiz_app/ai/default_ai_service.dart';
-import 'package:quiz_app/ai/draft_validator.dart';
 import 'package:quiz_app/ai/llm_provider.dart';
 import 'package:quiz_app/ai/providers/default_llm_provider_factory.dart';
 import 'package:quiz_app/ai/secure_api_key_store.dart';

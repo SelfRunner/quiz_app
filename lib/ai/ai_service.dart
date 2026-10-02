@@ -3,9 +3,11 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import '../data/models/drafts.dart';
 import '../data/models/question.dart';
 import 'ai_source.dart';
+import 'draft_validator.dart';
 import 'llm_provider.dart';
 
 export 'ai_source.dart';
+export 'draft_validator.dart' show DraftValidation;
 
 part 'ai_service.freezed.dart';
 
@@ -67,7 +69,7 @@ abstract class NoteGenerationRequest with _$NoteGenerationRequest {
 }
 
 /// A generic generation from sources into any JSON schema (e.g. future
-/// flashcard decks). Run with `DefaultAiService.generateStructured`.
+/// flashcard decks). Run with [AiService.generateStructured].
 class StructuredGenerationRequest {
   const StructuredGenerationRequest({
     required this.sources,
@@ -135,6 +137,17 @@ abstract interface class AiService {
   Future<QuizDraft> generateQuiz(QuizGenerationRequest request);
 
   Future<NoteDraft> generateNote(NoteGenerationRequest request);
+
+  /// Generic generation from sources into `request.schema` (e.g. flashcard
+  /// decks), with the same source handling, capability checks and single
+  /// repair retry as quizzes/notes. [validate] returns the parsed value or
+  /// errors that are sent back to the model once. [what] names the result
+  /// in error messages ("deck", ...).
+  Future<T> generateStructured<T>(
+    StructuredGenerationRequest request, {
+    required DraftValidation<T> Function(Map<String, dynamic> json) validate,
+    String what = 'result',
+  });
 
   /// The provider/model that a request with these overrides would use:
   /// override > `ApiKeyStore` selection > first provider with a key; model

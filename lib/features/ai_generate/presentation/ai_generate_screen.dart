@@ -3,30 +3,61 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../ai/ai_capabilities.dart';
 import '../../../ai/ai_providers.dart';
+import '../../../ai/ai_readiness.dart';
 import '../../../ai/ai_service.dart';
-import '../../../ai/youtube_url.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/providers.dart';
 import '../../../core/router/routes.dart';
+import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../quizzes/domain/question_rules.dart';
 import '../../quizzes/widgets/question_list_editor.dart';
-import '../../quizzes/widgets/quiz_format.dart';
+import '../../quizzes/widgets/quiz_format.dart'
+    show errorText, plural, questionTypeIcon, questionTypeLabel, showSnack;
+import '../domain/generation_sources.dart';
 import '../widgets/ai_error_card.dart';
+import '../widgets/attachment_picker.dart';
 import '../widgets/note_draft_editor.dart';
+import '../widgets/note_picker.dart';
 
 /// What to generate.
 enum AiGenerateKind { quiz, note }
 
 enum _Stage { form, generating, preview }
 
-/// Max characters of pasted context kept in `QuizSource.contextText`.
-const int _maxStoredContext = 20000;
+enum NoteStyle {
+  summary('Summary', 'Write a concise summary of the key points.'),
+  studyNotes(
+    'Study notes',
+    'Write detailed study notes with headings, key terms and examples.',
+  ),
+  outline('Outline', 'Write a structured outline with nested bullet points.');
 
-/// AI generation: inputs → progress (cancellable) → editable preview → save
-/// as a quiz (subject- or note-level) or a note.
+  const NoteStyle(this.label, this.instruction);
+  final String label;
+  final String instruction;
+}
+
+enum NoteLength {
+  short('Short', 'Keep it short (about 200-400 words).'),
+  medium('Medium', 'Aim for about 500-900 words.'),
+  long('Long', 'Be thorough (1000+ words).');
+
+  const NoteLength(this.label, this.instruction);
+  final String label;
+  final String instruction;
+}
+
+/// Two-column layout from this body width.
+const double _twoColumnWidth = 900;
+
+/// AI generation: sources (text, notes, files, YouTube) + options →
+/// progress (cancellable) → editable preview → save as a quiz (subject- or
+/// note-level) or a note. Shows only a "Set up AI" state until a provider
+/// is configured.
 class AiGenerateScreen extends ConsumerStatefulWidget {
   const AiGenerateScreen({
     super.key,
@@ -40,7 +71,8 @@ class AiGenerateScreen extends ConsumerStatefulWidget {
   /// Target subject (pre-selected); may be null to let the user pick.
   final String? subjectId;
 
-  /// Attach a generated quiz to this note.
+  /// Attach a generated quiz to this note; the note is preselected as a
+  /// source.
   final String? noteId;
 
   @override
@@ -48,35 +80,35 @@ class AiGenerateScreen extends ConsumerStatefulWidget {
 }
 
 class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
-  // Inputs.
-  final _context = TextEditingController();
+  // Sources.
+  final _text = TextEditingController();
   final _youtube = TextEditingController();
-  final _topic = TextEditingController();
+  List<Note> _notes = [];
+  List<Attachment> _files = [];
+
+  // Options.
   final _language = TextEditingController();
   final _instructions = TextEditingController();
   int _count = 10;
   Set<QuestionType> _types = {...QuestionType.values};
   Difficulty _difficulty = Difficulty.medium;
+  NoteStyle _noteStyle = NoteStyle.studyNotes;
+  NoteLength _noteLength = NoteLength.medium;
   String? _pickedSubjectId;
-  bool _prefilled = false;
   Note? _note;
+  bool _notePreselected = false;
 
   // Validation (shown after the first Generate).
   bool _validated = false;
 
-  // Provider selection.
-  AiSelection? _selection;
-  Object? _selectionError;
-  bool _selectionLoading = true;
-
   // Generation.
   _Stage _stage = _Stage.form;
   int _generation = 0;
+  bool _preparing = false;
   Object? _error;
   AiSelection? _used;
   QuizGenerationRequest? _quizRequest;
-  String? _usedContext;
-  String? _usedYoutube;
+  SourceSelection _usedSources = const SourceSelection();
 
   // Preview.
   final _draftTitle = TextEditingController();
@@ -100,22 +132,20 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         final note = next.value;
         if (note == null) return;
         _note = note;
-        if (!_prefilled) {
-          _prefilled = true;
-          if (_context.text.isEmpty) _context.text = note.contentMd;
+        if (!_notePreselected) {
+          _notePreselected = true;
+          if (!_notes.any((n) => n.id == note.id)) _notes = [note, ..._notes];
         }
         if (mounted) setState(() {});
       }, fireImmediately: true);
     }
-    _resolveSelection();
   }
 
   @override
   void dispose() {
     for (final c in [
-      _context,
+      _text,
       _youtube,
-      _topic,
       _language,
       _instructions,
       _draftTitle,
@@ -127,52 +157,74 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
     super.dispose();
   }
 
-  Future<void> _resolveSelection() async {
-    setState(() {
-      _selectionLoading = true;
-      _selectionError = null;
-    });
-    try {
-      final sel = await ref.read(aiServiceProvider).resolveSelection();
-      if (!mounted) return;
-      setState(() {
-        _selection = sel;
-        _selectionLoading = false;
-      });
-    } on Object catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _selection = null;
-        _selectionError = e;
-        _selectionLoading = false;
-      });
-    }
-  }
+  AiReadiness? get _readiness => ref.read(aiReadinessProvider).value;
 
-  Future<void> _openSettings() async {
-    await context.push(AppRoutes.settings);
-    if (mounted) await _resolveSelection();
-  }
+  AiCapabilities get _caps =>
+      _readiness?.capabilities ?? AiCapabilities.textOnly;
+
+  AiSelection? _selectionOf(AiReadiness? r) =>
+      r != null && r.isConfigured && r.providerId != null && r.model != null
+      ? AiSelection(providerId: r.providerId!, model: r.model!)
+      : null;
+
+  void _openSettings() => context.push(AppRoutes.settings);
 
   String? get _subjectId =>
       _note?.subjectId ?? widget.subjectId ?? _pickedSubjectId;
 
   // ---------------------------------------------------------------------------
-  // Validation
+  // Sources & validation
   // ---------------------------------------------------------------------------
 
   String? get _youtubeError {
-    final text = _youtube.text.trim();
-    if (text.isEmpty) return null;
-    return YoutubeUrl.parseVideoId(text) == null
-        ? "That doesn't look like a YouTube video link."
-        : null;
+    if (!_caps.youtube) return null;
+    try {
+      parseYoutubeInput(_youtube.text);
+      return null;
+    } on FormatException catch (e) {
+      return e.message;
+    }
   }
 
-  String? get _sourceError =>
-      _context.text.trim().isEmpty && _youtube.text.trim().isEmpty
-      ? 'Paste some text or add a YouTube link to generate from.'
-      : null;
+  SourceSelection get _sources {
+    String? youtube;
+    if (_caps.youtube && _youtubeError == null) {
+      youtube = parseYoutubeInput(_youtube.text);
+    }
+    return SourceSelection(
+      text: _text.text,
+      notes: _notes,
+      files: _files,
+      youtubeUrl: youtube,
+    );
+  }
+
+  List<Attachment> get _unsupportedFiles => [
+    for (final a in _files)
+      if (fileKindProblem(a.kind, _caps) != null) a,
+  ];
+
+  String? get _sourceError {
+    final s = _sources;
+    if (s.isEmpty) {
+      return 'Add some text, a note, a file or a YouTube link to generate '
+          'from.';
+    }
+    final bad = _unsupportedFiles;
+    if (bad.isNotEmpty) {
+      return "Remove files this model can't read: "
+          '${bad.map((a) => a.name).join(', ')}.';
+    }
+    final sel = _selectionOf(_readiness);
+    final limit = sel == null ? null : requestFileLimit(sel.providerId);
+    final total = binaryFileBytes(_files);
+    if (limit != null && total > limit) {
+      return 'The files total ${formatFileSize(total)}; '
+          '${sel!.providerId.displayName} accepts up to '
+          '${formatFileSize(limit)} per request. Remove some files.';
+    }
+    return null;
+  }
 
   String? get _subjectError =>
       _subjectId == null ? 'Choose where to save the result.' : null;
@@ -186,46 +238,74 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
       _subjectError == null &&
       _typesError == null;
 
+  Future<void> _addNotes() async {
+    final picked = await showNotePicker(context, selected: _notes);
+    if (picked != null && mounted) setState(() => _notes = picked);
+  }
+
+  Future<void> _addFiles() async {
+    final subjectId = _subjectId;
+    if (subjectId == null) return;
+    final picked = await showAttachmentPicker(
+      context,
+      subjectId: subjectId,
+      capabilities: _caps,
+      selected: _files,
+    );
+    if (picked != null && mounted) setState(() => _files = picked);
+  }
+
   // ---------------------------------------------------------------------------
   // Generation
   // ---------------------------------------------------------------------------
 
   String? _blankToNull(String s) => s.trim().isEmpty ? null : s.trim();
 
-  String? get _topicValue {
-    final typed = _blankToNull(_topic.text);
-    if (typed != null) return typed;
+  String? get _topic {
     if (_note != null) return _note!.title;
     final id = _subjectId;
-    return id == null ? null : ref.read(subjectProvider(id)).value?.title;
+    if (id == null) return null;
+    final subject =
+        ref.read(subjectProvider(id)).value ??
+        ref.read(subjectsProvider).value?.where((s) => s.id == id).firstOrNull;
+    return subject?.title;
   }
+
+  String? get _noteInstructions => [
+    _noteStyle.instruction,
+    _noteLength.instruction,
+    ?_blankToNull(_instructions.text),
+  ].join('\n');
 
   Future<void> _generate() async {
     setState(() => _validated = true);
     if (!_inputValid) return;
+    final sel = _selectionOf(_readiness);
+    if (sel == null) return;
     FocusScope.of(context).unfocus();
     final gen = ++_generation;
+    final selection = _sources;
     setState(() {
       _stage = _Stage.generating;
+      _preparing = selection.files.isNotEmpty;
       _error = null;
     });
     final ai = ref.read(aiServiceProvider);
-    final contextText = _blankToNull(_context.text);
-    final youtube = _youtube.text.trim().isEmpty
-        ? null
-        : YoutubeUrl.normalize(_youtube.text);
     try {
-      final sel = _selection ?? await ai.resolveSelection();
+      final sources = await selection.toAiSources(
+        (a) => ref.read(attachmentRepositoryProvider).getBytes(a),
+      );
+      if (gen != _generation || !mounted) return;
+      setState(() => _preparing = false);
       if (_isQuiz) {
         final request = QuizGenerationRequest(
-          contextText: contextText,
-          youtubeUrl: youtube,
+          sources: sources,
           questionCount: _count,
           questionTypes: {..._types},
           difficulty: _difficulty,
           language: _blankToNull(_language.text),
           extraInstructions: _blankToNull(_instructions.text),
-          topic: _topicValue,
+          topic: _topic,
           providerId: sel.providerId,
           model: sel.model,
         );
@@ -235,8 +315,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         setState(() {
           _used = sel;
           _quizRequest = request;
-          _usedContext = contextText;
-          _usedYoutube = youtube;
+          _usedSources = selection;
           _draftTitle.text = draft.title;
           _draftDescription.text = draft.description ?? '';
           _questions = draft.toQuestions(newId);
@@ -244,11 +323,10 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         });
       } else {
         final request = NoteGenerationRequest(
-          contextText: contextText,
-          youtubeUrl: youtube,
+          sources: sources,
           language: _blankToNull(_language.text),
-          extraInstructions: _blankToNull(_instructions.text),
-          topic: _topicValue,
+          extraInstructions: _noteInstructions,
+          topic: _topic,
           providerId: sel.providerId,
           model: sel.model,
         );
@@ -256,8 +334,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
         if (gen != _generation || !mounted) return;
         setState(() {
           _used = sel;
-          _usedContext = contextText;
-          _usedYoutube = youtube;
+          _usedSources = selection;
           _draftTitle.text = draft.title;
           _noteBody.text = draft.contentMarkdown;
           _resetPreviewState();
@@ -267,11 +344,9 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
       if (gen != _generation || !mounted) return;
       setState(() {
         _error = e;
+        _preparing = false;
         _stage = _Stage.form;
       });
-      if (e is AiException && e.kind == AiErrorKind.missingApiKey) {
-        await _resolveSelection();
-      }
     }
   }
 
@@ -286,6 +361,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   void _cancel() {
     setState(() {
       _generation++;
+      _preparing = false;
       _stage = _Stage.form;
     });
   }
@@ -418,7 +494,6 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
     try {
       final String location;
       if (_isQuiz) {
-        final ctx = _usedContext;
         final quiz = await ref
             .read(quizRepositoryProvider)
             .create(
@@ -427,14 +502,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               title: title,
               description: _blankToNull(_draftDescription.text),
               questions: [for (final q in _questions) normalizeQuestion(q)],
-              source: QuizSource(
-                contextText: ctx == null || ctx.length <= _maxStoredContext
-                    ? ctx
-                    : ctx.substring(0, _maxStoredContext),
-                youtubeUrl: _usedYoutube,
-                provider: _used?.providerId.wireName,
-                model: _used?.model,
-              ),
+              source: _usedSources.toQuizSource(_used),
             );
         location = AppRoutes.quiz(quiz.id);
       } else {
@@ -486,12 +554,26 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final readiness = ref.watch(aiReadinessProvider);
+    final r = readiness.value;
     final title = switch ((_isQuiz, _stage)) {
       (true, _Stage.preview) => 'Review quiz',
       (false, _Stage.preview) => 'Review note',
       (true, _) => 'Generate quiz with AI',
       (false, _) => 'Generate note with AI',
     };
+    final Widget body;
+    if (_stage == _Stage.form && r == null) {
+      body = const Center(child: CircularProgressIndicator());
+    } else if (_stage == _Stage.form && !r!.isConfigured) {
+      body = _notReady(r);
+    } else {
+      body = switch (_stage) {
+        _Stage.form => _form(context, r!),
+        _Stage.generating => _progress(context),
+        _Stage.preview => _isQuiz ? _quizPreview(context) : _notePreview(),
+      };
+    }
     return PopScope(
       canPop: _stage == _Stage.form,
       onPopInvokedWithResult: (didPop, _) {
@@ -499,11 +581,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
       },
       child: Scaffold(
         appBar: AppBar(title: Text(title)),
-        body: switch (_stage) {
-          _Stage.form => _form(context),
-          _Stage.generating => _progress(context),
-          _Stage.preview => _isQuiz ? _quizPreview(context) : _notePreview(),
-        },
+        body: body,
         bottomNavigationBar: _stage == _Stage.preview
             ? _previewActions(context)
             : null,
@@ -511,169 +589,27 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
     );
   }
 
+  // --- Not ready --------------------------------------------------------------
+
+  Widget _notReady(AiReadiness r) => EmptyState(
+    key: const Key('ai-not-ready'),
+    icon: Icons.auto_awesome_outlined,
+    title: 'Set up AI to generate',
+    message: [
+      ?r.reason,
+      'AI uses your own API key (Gemini, OpenAI, Anthropic or an '
+          'OpenAI-compatible endpoint). Keys stay on this device.',
+    ].join('\n\n'),
+    action: FilledButton(
+      key: const Key('ai-open-settings'),
+      onPressed: _openSettings,
+      child: const Text('Open Settings'),
+    ),
+  );
+
   // --- Form -------------------------------------------------------------------
 
-  Widget _form(BuildContext context) {
-    final theme = Theme.of(context);
-    final v = _validated;
-
-    final source = _Section(
-      title: 'Source material',
-      icon: Icons.article_outlined,
-      children: [
-        TextField(
-          key: const Key('ai-context'),
-          controller: _context,
-          minLines: 6,
-          maxLines: 16,
-          decoration: InputDecoration(
-            labelText: 'Text to learn from',
-            hintText: 'Paste notes, an article, a transcript…',
-            alignLabelWithHint: true,
-            errorText: v ? _sourceError : null,
-            helperText: widget.noteId != null && _note != null
-                ? 'Prefilled with the note "${_note!.title}".'
-                : null,
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          key: const Key('ai-youtube'),
-          controller: _youtube,
-          keyboardType: TextInputType.url,
-          decoration: InputDecoration(
-            labelText: 'YouTube video (optional)',
-            hintText: 'https://www.youtube.com/watch?v=…',
-            prefixIcon: const Icon(Icons.smart_display_outlined),
-            errorText: _youtubeError,
-            helperText:
-                'Gemini watches the video directly; other providers use the '
-                "video's captions.",
-            helperMaxLines: 2,
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        if (kIsWeb &&
-            _youtube.text.trim().isNotEmpty &&
-            _selection != null &&
-            !_selection!.providerId.supportsYoutubeUrl) ...[
-          const SizedBox(height: 12),
-          _Notice(
-            icon: Icons.warning_amber_rounded,
-            text:
-                'In the browser, YouTube usually blocks caption downloads '
-                '(CORS), so ${_selection!.providerId.displayName} may not be '
-                'able to use this video. Switch to Gemini in Settings, or '
-                'paste the transcript above.',
-          ),
-        ],
-        const SizedBox(height: 16),
-        TextField(
-          key: const Key('ai-topic'),
-          controller: _topic,
-          decoration: InputDecoration(
-            labelText: 'Topic or focus (optional)',
-            hintText: _topicHint(),
-          ),
-        ),
-      ],
-    );
-
-    final options = _Section(
-      title: _isQuiz ? 'Quiz options' : 'Note options',
-      icon: Icons.tune,
-      children: [
-        if (_isQuiz) ...[
-          Row(
-            children: [
-              Text('Questions', style: theme.textTheme.labelLarge),
-              const Spacer(),
-              Text('$_count', style: theme.textTheme.titleMedium),
-            ],
-          ),
-          Slider(
-            value: _count.toDouble(),
-            min: 1,
-            max: 50,
-            divisions: 49,
-            label: '$_count',
-            onChanged: (x) => setState(() => _count = x.round()),
-          ),
-          const SizedBox(height: 8),
-          Text('Question types', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final t in QuestionType.values)
-                FilterChip(
-                  avatar: Icon(questionTypeIcon(t), size: 18),
-                  label: Text(questionTypeLabel(t)),
-                  selected: _types.contains(t),
-                  showCheckmark: false,
-                  onSelected: (on) => setState(() {
-                    _types = on ? ({..._types, t}) : ({..._types}..remove(t));
-                  }),
-                ),
-            ],
-          ),
-          if (v && _typesError != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                _typesError!,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.error,
-                ),
-              ),
-            ),
-          const SizedBox(height: 16),
-          Text('Difficulty', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 8),
-          SegmentedButton<Difficulty>(
-            segments: const [
-              ButtonSegment(value: Difficulty.easy, label: Text('Easy')),
-              ButtonSegment(value: Difficulty.medium, label: Text('Medium')),
-              ButtonSegment(value: Difficulty.hard, label: Text('Hard')),
-            ],
-            selected: {_difficulty},
-            onSelectionChanged: (s) => setState(() => _difficulty = s.first),
-          ),
-          const SizedBox(height: 16),
-        ],
-        TextField(
-          controller: _language,
-          decoration: const InputDecoration(
-            labelText: 'Language (optional)',
-            hintText: 'Same as the source, e.g. English, Deutsch',
-          ),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _instructions,
-          minLines: 1,
-          maxLines: 4,
-          decoration: InputDecoration(
-            labelText: 'Extra instructions (optional)',
-            hintText: _isQuiz
-                ? 'e.g. Focus on dates and definitions'
-                : 'e.g. Concise summary with headings and key terms',
-          ),
-        ),
-      ],
-    );
-
-    final target = _targetSection(context);
-    final generate = FilledButton.icon(
-      key: const Key('ai-generate'),
-      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-      onPressed: _selection == null && !_selectionLoading ? null : _generate,
-      icon: const Icon(Icons.auto_awesome),
-      label: Text(_isQuiz ? 'Generate quiz' : 'Generate note'),
-    );
-    final providerCard = _providerCard(context);
+  Widget _form(BuildContext context, AiReadiness r) {
     final error = _error == null
         ? null
         : AiErrorCard(
@@ -682,210 +618,527 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
             onRetry: _generate,
             onDismiss: () => setState(() => _error = null),
           );
+    final needsSubjectPicker =
+        widget.noteId == null && widget.subjectId == null;
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 1000) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: MaxWidth(
-              maxWidth: 1200,
-              child: Column(
-                children: [
-                  if (error != null) ...[error, const SizedBox(height: 16)],
+        final wide = constraints.maxWidth >= _twoColumnWidth;
+        final sources = _sourcesPanel(context, r);
+        Widget side() => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _targetPanel(context),
+            Gaps.h16,
+            _optionsPanel(context),
+            Gaps.h16,
+            _generateBar(context, r),
+          ],
+        );
+        return SingleChildScrollView(
+          padding: wide ? Insets.pageWide : Insets.page,
+          child: ContentContainer(
+            maxWidth: wide ? ContentWidth.wide : ContentWidth.form,
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _providerHeader(context, r),
+                Gaps.h16,
+                if (error != null) ...[error, Gaps.h16],
+                if (wide)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: source),
-                      const SizedBox(width: 24),
-                      SizedBox(
-                        width: 400,
-                        child: Column(
-                          children: [
-                            providerCard,
-                            const SizedBox(height: 16),
-                            ?target,
-                            if (target != null) const SizedBox(height: 16),
-                            options,
-                            const SizedBox(height: 16),
-                            generate,
-                          ],
-                        ),
-                      ),
+                      Expanded(child: sources),
+                      Gaps.w24,
+                      SizedBox(width: 380, child: side()),
                     ],
-                  ),
+                  )
+                else ...[
+                  // The library of files needs a subject: ask for it first.
+                  if (needsSubjectPicker) ...[_targetPanel(context), Gaps.h16],
+                  sources,
+                  Gaps.h16,
+                  if (!needsSubjectPicker) ...[_targetPanel(context), Gaps.h16],
+                  _optionsPanel(context),
+                  Gaps.h16,
+                  _generateBar(context, r),
                 ],
-              ),
+              ],
             ),
-          );
-        }
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            MaxWidth(
-              maxWidth: 760,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (error != null) ...[error, const SizedBox(height: 16)],
-                  providerCard,
-                  const SizedBox(height: 16),
-                  ?target,
-                  if (target != null) const SizedBox(height: 16),
-                  source,
-                  const SizedBox(height: 16),
-                  options,
-                  const SizedBox(height: 24),
-                  generate,
-                  const SizedBox(height: 24),
-                ],
-              ),
-            ),
-          ],
+          ),
         );
       },
     );
   }
 
-  String? _topicHint() {
-    if (_note != null) return _note!.title;
-    final id = _subjectId;
-    return id == null ? null : ref.watch(subjectProvider(id)).value?.title;
+  Widget _providerHeader(BuildContext context, AiReadiness r) {
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    return Row(
+      children: [
+        Icon(Icons.auto_awesome_outlined, size: 16, color: colors.mutedText),
+        Gaps.w8,
+        Flexible(
+          child: Text(
+            '${r.providerId?.displayName ?? 'AI'} · ${r.model ?? ''}',
+            key: const Key('ai-provider'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colors.mutedText,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Gaps.w4,
+        TextButton(
+          key: const Key('ai-change-provider'),
+          onPressed: _openSettings,
+          child: const Text('Change'),
+        ),
+      ],
+    );
   }
 
-  Widget _providerCard(BuildContext context) {
+  Widget _sourcesPanel(BuildContext context, AiReadiness r) {
     final theme = Theme.of(context);
-    if (_selectionLoading) {
-      return const Card(
-        child: ListTile(
-          leading: SizedBox.square(
-            dimension: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
+    final colors = AppColors.of(context);
+    final caps = r.capabilities;
+    final sourceError = _validated ? _sourceError : null;
+    Widget muted(String text, {Key? key}) => Text(
+      text,
+      key: key,
+      style: theme.textTheme.bodySmall?.copyWith(color: colors.mutedText),
+    );
+
+    final subjectId = _subjectId;
+    final blocks = <Widget>[
+      _SourceBlock(
+        icon: Icons.short_text,
+        title: 'Text',
+        child: TextField(
+          key: const Key('ai-context'),
+          controller: _text,
+          minLines: 4,
+          maxLines: 14,
+          decoration: const InputDecoration(
+            hintText: 'Paste notes, an article, a transcript…',
           ),
-          title: Text('Checking AI settings…'),
+          onChanged: (_) => setState(() {}),
         ),
-      );
-    }
-    final sel = _selection;
-    if (sel != null) {
-      return Card(
-        child: ListTile(
-          leading: const Icon(Icons.auto_awesome),
-          title: Text('Using ${sel.providerId.displayName}'),
-          subtitle: Text(sel.model),
-          trailing: TextButton(
-            onPressed: _openSettings,
-            child: const Text('Change'),
-          ),
+      ),
+      _SourceBlock(
+        icon: Icons.description_outlined,
+        title: 'Notes',
+        trailing: TextButton.icon(
+          key: const Key('ai-add-notes'),
+          onPressed: _addNotes,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Add notes'),
         ),
-      );
-    }
-    final info = describeAiError(_selectionError ?? Object());
-    return Card(
-      key: const Key('ai-no-provider'),
-      color: theme.colorScheme.tertiaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.key_off_outlined,
-                  color: theme.colorScheme.onTertiaryContainer,
+        child: _notes.isEmpty
+            ? muted('Use any of your notes, or notes shared with you.')
+            : Wrap(
+                spacing: Insets.sm,
+                runSpacing: Insets.sm,
+                children: [
+                  for (final n in _notes)
+                    InputChip(
+                      key: ValueKey('note-chip-${n.id}'),
+                      avatar: const Icon(Icons.description_outlined, size: 16),
+                      label: Text(
+                        n.title.trim().isEmpty ? 'Untitled' : n.title,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      deleteButtonTooltipMessage: 'Remove',
+                      onDeleted: () => setState(
+                        () => _notes = [
+                          for (final x in _notes)
+                            if (x.id != n.id) x,
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+      ),
+      _SourceBlock(
+        icon: Icons.attach_file,
+        title: 'Files',
+        trailing: TextButton.icon(
+          key: const Key('ai-add-files'),
+          onPressed: subjectId == null ? null : _addFiles,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Add files'),
+        ),
+        child: subjectId == null
+            ? muted(
+                'Choose where to save the result first — files come from '
+                "that subject's library.",
+                key: const Key('ai-files-need-subject'),
+              )
+            : _files.isEmpty
+            ? muted(
+                '${uploadKindsLabel(caps)} from the subject library, or '
+                'upload new ones.',
+                key: const Key('ai-files-hint'),
+              )
+            : Wrap(
+                spacing: Insets.sm,
+                runSpacing: Insets.sm,
+                children: [for (final a in _files) _fileChip(context, a)],
+              ),
+      ),
+      if (caps.youtube)
+        _SourceBlock(
+          icon: Icons.smart_display_outlined,
+          title: 'YouTube',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const Key('ai-youtube'),
+                controller: _youtube,
+                keyboardType: TextInputType.url,
+                decoration: InputDecoration(
+                  hintText: 'https://www.youtube.com/watch?v=…',
+                  errorText: _youtubeError,
+                  helperText: caps.youtubeNative
+                      ? '${r.providerId?.displayName ?? 'The model'} watches '
+                            'the video directly.'
+                      : "Uses the video's captions.",
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(info.title, style: theme.textTheme.titleSmall),
+                onChanged: (_) => setState(() {}),
+              ),
+              if (kIsWeb &&
+                  !caps.youtubeNative &&
+                  _youtube.text.trim().isNotEmpty) ...[
+                Gaps.h8,
+                const InfoBanner(
+                  kind: InfoBannerKind.warning,
+                  message:
+                      'In the browser, YouTube usually blocks caption '
+                      'downloads, so this model may not be able to use the '
+                      'video. Switch to Gemini in Settings, or paste the '
+                      'transcript as text.',
                 ),
               ],
+            ],
+          ),
+        )
+      else
+        _SourceBlock(
+          icon: Icons.smart_display_outlined,
+          title: 'YouTube',
+          child: muted(
+            "This model can't use YouTube videos here. Gemini can watch "
+            'them directly — switch in Settings.',
+            key: const Key('ai-youtube-unavailable'),
+          ),
+        ),
+    ];
+
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(Insets.lg, Insets.md, Insets.lg, 0),
+            child: SectionHeader(
+              title: 'Sources',
+              subtitle: 'Combine any of these.',
+              padding: EdgeInsets.zero,
             ),
-            const SizedBox(height: 8),
-            Text(info.hint ?? info.message),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.tonalIcon(
-                onPressed: _openSettings,
-                icon: const Icon(Icons.settings_outlined),
-                label: const Text('Open settings'),
+          ),
+          if (sourceError != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Insets.lg,
+                Insets.sm,
+                Insets.lg,
+                0,
+              ),
+              child: Text(
+                sourceError,
+                key: const Key('ai-source-error'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
               ),
             ),
+          for (final (i, b) in blocks.indexed) ...[
+            if (i > 0) Divider(height: 1, color: colors.hairline),
+            b,
           ],
-        ),
+        ],
       ),
     );
   }
 
-  Widget? _targetSection(BuildContext context) {
+  Widget _fileChip(BuildContext context, Attachment a) {
+    final problem = fileKindProblem(a.kind, _caps);
+    final me = ref.watch(currentUserIdProvider);
     final theme = Theme.of(context);
+    final chip = InputChip(
+      key: ValueKey('file-chip-${a.id}'),
+      avatar: Icon(
+        problem == null ? attachmentKindIcon(a.kind) : Icons.block,
+        size: 16,
+        color: problem == null ? null : theme.colorScheme.error,
+      ),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(child: Text(a.name, overflow: TextOverflow.ellipsis)),
+          Gaps.w4,
+          Text(
+            formatFileSize(a.sizeBytes),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.of(context).faintText,
+            ),
+          ),
+          if (a.isOwnedBy(me)) ...[Gaps.w4, UploadStatusPill(attachment: a)],
+        ],
+      ),
+      deleteButtonTooltipMessage: 'Remove',
+      onDeleted: () => setState(
+        () => _files = [
+          for (final x in _files)
+            if (x.id != a.id) x,
+        ],
+      ),
+    );
+    return problem == null ? chip : Tooltip(message: problem, child: chip);
+  }
+
+  Widget _targetPanel(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget panel(Widget child) => _Panel(title: 'Save to', child: child);
     if (widget.noteId != null) {
       final note = _note;
-      return _Section(
-        title: 'Save to',
-        icon: Icons.description_outlined,
-        children: [
-          Text(
-            note == null
-                ? 'Loading note…'
-                : _isQuiz
-                ? 'Quiz for the note "${note.title}"'
-                : 'New note in the same subject as "${note.title}"',
-            style: theme.textTheme.bodyLarge,
-          ),
-        ],
+      return panel(
+        Text(
+          note == null
+              ? 'Loading note…'
+              : _isQuiz
+              ? 'Quiz for the note "${note.title}"'
+              : 'New note in the same subject as "${note.title}"',
+          style: theme.textTheme.bodyMedium,
+        ),
       );
     }
     if (widget.subjectId != null) {
       final subject = ref.watch(subjectProvider(widget.subjectId!)).value;
-      return _Section(
-        title: 'Save to',
-        icon: Icons.folder_outlined,
-        children: [
-          Text(
-            subject == null ? 'Loading subject…' : subject.title,
-            style: theme.textTheme.bodyLarge,
-          ),
-        ],
+      return panel(
+        Row(
+          children: [
+            SubjectColorDot(color: subject?.color),
+            Gaps.w8,
+            Expanded(
+              child: Text(
+                subject == null ? 'Loading subject…' : subject.title,
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
       );
     }
     final subjects = ref.watch(subjectsProvider);
-    return _Section(
-      title: 'Save to',
-      icon: Icons.folder_outlined,
-      children: [
-        switch (subjects) {
-          AsyncValue(:final value?) when value.isEmpty => Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('You have no subjects yet. Create one first.'),
-              TextButton(
-                onPressed: () => context.go(AppRoutes.subjects),
-                child: const Text('Go to subjects'),
+    return panel(switch (subjects) {
+      AsyncValue(:final value?) when value.isEmpty => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('You have no subjects yet. Create one first.'),
+          TextButton(
+            onPressed: () => context.go(AppRoutes.subjects),
+            child: const Text('Go to subjects'),
+          ),
+        ],
+      ),
+      AsyncValue(:final value?) => DropdownButtonFormField<String>(
+        key: const Key('ai-subject'),
+        initialValue: _pickedSubjectId,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: 'Subject',
+          isDense: true,
+          errorText: _validated ? _subjectError : null,
+        ),
+        items: [
+          for (final s in value)
+            DropdownMenuItem(
+              value: s.id,
+              child: Row(
+                children: [
+                  SubjectColorDot(color: s.color),
+                  Gaps.w8,
+                  Expanded(
+                    child: Text(s.title, overflow: TextOverflow.ellipsis),
+                  ),
+                ],
               ),
-            ],
-          ),
-          AsyncValue(:final value?) => DropdownButtonFormField<String>(
-            key: const Key('ai-subject'),
-            initialValue: _pickedSubjectId,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: 'Subject',
-              errorText: _validated ? _subjectError : null,
             ),
-            items: [
-              for (final s in value)
-                DropdownMenuItem(
-                  value: s.id,
-                  child: Text(s.title, overflow: TextOverflow.ellipsis),
+        ],
+        onChanged: (id) => setState(() {
+          // Files belong to the previous subject's library.
+          if (id != _pickedSubjectId) _files = [];
+          _pickedSubjectId = id;
+        }),
+      ),
+      AsyncValue(:final error?) => Text(errorText(error)),
+      _ => const LinearProgressIndicator(),
+    });
+  }
+
+  Widget _optionsPanel(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = theme.textTheme.labelLarge;
+    return _Panel(
+      title: 'Options',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_isQuiz) ...[
+            Row(
+              children: [
+                Text('Questions', style: label),
+                const Spacer(),
+                Text('$_count', key: const Key('ai-count'), style: label),
+              ],
+            ),
+            Slider(
+              value: _count.toDouble(),
+              min: 1,
+              max: 50,
+              divisions: 49,
+              label: '$_count',
+              onChanged: (x) => setState(() => _count = x.round()),
+            ),
+            Text('Question types', style: label),
+            Gaps.h8,
+            Wrap(
+              spacing: Insets.sm,
+              runSpacing: Insets.sm,
+              children: [
+                for (final t in QuestionType.values)
+                  FilterChip(
+                    avatar: Icon(questionTypeIcon(t), size: 16),
+                    label: Text(questionTypeLabel(t)),
+                    selected: _types.contains(t),
+                    showCheckmark: false,
+                    onSelected: (on) => setState(() {
+                      _types = on ? ({..._types, t}) : ({..._types}..remove(t));
+                    }),
+                  ),
+              ],
+            ),
+            if (_validated && _typesError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: Insets.xs),
+                child: Text(
+                  _typesError!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
                 ),
-            ],
-            onChanged: (id) => setState(() => _pickedSubjectId = id),
+              ),
+            Gaps.h16,
+            Text('Difficulty', style: label),
+            Gaps.h8,
+            SegmentedButton<Difficulty>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: Difficulty.easy, label: Text('Easy')),
+                ButtonSegment(value: Difficulty.medium, label: Text('Medium')),
+                ButtonSegment(value: Difficulty.hard, label: Text('Hard')),
+              ],
+              selected: {_difficulty},
+              onSelectionChanged: (s) => setState(() => _difficulty = s.first),
+            ),
+          ] else ...[
+            Text('Style', style: label),
+            Gaps.h8,
+            SegmentedButton<NoteStyle>(
+              showSelectedIcon: false,
+              segments: [
+                for (final s in NoteStyle.values)
+                  ButtonSegment(value: s, label: Text(s.label)),
+              ],
+              selected: {_noteStyle},
+              onSelectionChanged: (s) => setState(() => _noteStyle = s.first),
+            ),
+            Gaps.h16,
+            Text('Length', style: label),
+            Gaps.h8,
+            SegmentedButton<NoteLength>(
+              showSelectedIcon: false,
+              segments: [
+                for (final l in NoteLength.values)
+                  ButtonSegment(value: l, label: Text(l.label)),
+              ],
+              selected: {_noteLength},
+              onSelectionChanged: (s) => setState(() => _noteLength = s.first),
+            ),
+          ],
+          Gaps.h16,
+          TextField(
+            key: const Key('ai-language'),
+            controller: _language,
+            decoration: const InputDecoration(
+              labelText: 'Language',
+              hintText: 'Same as the sources',
+              isDense: true,
+            ),
           ),
-          AsyncValue(:final error?) => Text(errorText(error)),
-          _ => const LinearProgressIndicator(),
-        },
+          Gaps.h12,
+          TextField(
+            key: const Key('ai-instructions'),
+            controller: _instructions,
+            minLines: 1,
+            maxLines: 4,
+            decoration: InputDecoration(
+              labelText: 'Focus (optional)',
+              hintText: _isQuiz
+                  ? 'e.g. Dates and definitions'
+                  : 'e.g. Key terms and formulas',
+              isDense: true,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _generateBar(BuildContext context, AiReadiness r) {
+    final theme = Theme.of(context);
+    final colors = AppColors.of(context);
+    final s = _sources;
+    final sel = _selectionOf(r);
+    final fileBytes = binaryFileBytes(_files);
+    final limit = sel == null ? null : requestFileLimit(sel.providerId);
+    final summary = [
+      s.count == 0 ? 'No sources yet' : plural(s.count, 'source'),
+      if (_files.isNotEmpty && fileBytes > 0)
+        '${formatFileSize(fileBytes)} of files'
+            '${limit == null ? '' : ' (max ${formatFileSize(limit)} per request)'}',
+    ].join(' · ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          summary,
+          key: const Key('ai-source-summary'),
+          style: theme.textTheme.bodySmall?.copyWith(color: colors.mutedText),
+        ),
+        Gaps.h8,
+        FilledButton.icon(
+          key: const Key('ai-generate'),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+          onPressed: _generate,
+          icon: const Icon(Icons.auto_awesome, size: 18),
+          label: Text(_isQuiz ? 'Generate quiz' : 'Generate note'),
+        ),
       ],
     );
   }
@@ -894,45 +1147,47 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
 
   Widget _progress(BuildContext context) {
     final theme = Theme.of(context);
-    final sel = _selection;
-    final usesCaptions =
-        _youtube.text.trim().isNotEmpty &&
-        sel != null &&
-        !sel.providerId.supportsYoutubeUrl;
+    final colors = AppColors.of(context);
+    final sel = _selectionOf(_readiness);
+    final s = _sources;
+    final usesCaptions = s.youtubeUrl != null && !_caps.youtubeNative;
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(Insets.xl),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox.square(
-                dimension: 56,
-                child: CircularProgressIndicator(strokeWidth: 5),
+                dimension: 32,
+                child: CircularProgressIndicator(strokeWidth: 3),
               ),
-              const SizedBox(height: 24),
+              Gaps.h24,
               Text(
                 _isQuiz ? 'Generating your quiz…' : 'Writing your note…',
-                style: theme.textTheme.titleLarge,
+                style: theme.textTheme.titleMedium,
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
+              Gaps.h8,
               Text(
                 [
+                  if (_preparing) 'Preparing files…',
                   if (sel != null)
                     'Using ${sel.providerId.displayName} · ${sel.model}.',
                   if (usesCaptions) "Fetching the video's captions first.",
                   'This can take up to a couple of minutes.',
                 ].join(' '),
-                style: theme.textTheme.bodyMedium,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.mutedText,
+                ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
+              Gaps.h24,
               OutlinedButton.icon(
                 key: const Key('ai-cancel'),
                 onPressed: _cancel,
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close, size: 18),
                 label: const Text('Cancel'),
               ),
             ],
@@ -945,16 +1200,14 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   // --- Preview -----------------------------------------------------------------
 
   Widget _previewInfo(BuildContext context) {
-    final theme = Theme.of(context);
     final used = _used;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: _Notice(
-        icon: Icons.auto_awesome,
-        text:
+      padding: const EdgeInsets.only(bottom: Insets.lg),
+      child: InfoBanner(
+        icon: Icons.auto_awesome_outlined,
+        message:
             'Review and edit the draft before saving. AI can make mistakes.'
             '${used == null ? '' : ' Generated by ${used.providerId.displayName} · ${used.model}.'}',
-        color: theme.colorScheme.secondaryContainer,
       ),
     );
   }
@@ -962,7 +1215,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   Widget _quizPreview(BuildContext context) {
     final theme = Theme.of(context);
     final header = Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: Insets.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -981,7 +1234,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
               _draftTitleError = null;
             }),
           ),
-          const SizedBox(height: 12),
+          Gaps.h12,
           TextField(
             controller: _draftDescription,
             minLines: 1,
@@ -991,15 +1244,13 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
             ),
             onChanged: (_) => _draftDirty = true,
           ),
-          const SizedBox(height: 20),
-          Text(
-            'Questions (${_questions.length})',
-            style: theme.textTheme.titleMedium,
-          ),
+          Gaps.h8,
+          SectionHeader(title: 'Questions', count: _questions.length),
         ],
       ),
     );
     return MaxWidth(
+      maxWidth: ContentWidth.readable,
       child: QuestionListEditor(
         questions: _questions,
         newId: ref.read(idGeneratorProvider),
@@ -1011,7 +1262,12 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
           _questions = list;
           _draftDirty = true;
         }),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        padding: const EdgeInsets.fromLTRB(
+          Insets.lg,
+          Insets.lg,
+          Insets.lg,
+          Insets.xl,
+        ),
       ),
     );
   }
@@ -1034,30 +1290,37 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
 
   Widget _previewActions(BuildContext context) {
     final busy = _saving || _regenerating.isNotEmpty;
-    return Material(
-      elevation: 3,
+    final colors = AppColors.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(top: BorderSide(color: colors.hairline)),
+      ),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Insets.lg,
+            vertical: Insets.sm + 2,
+          ),
           child: Row(
             children: [
               TextButton.icon(
                 onPressed: busy ? null : _backToOptions,
-                icon: const Icon(Icons.arrow_back),
+                icon: const Icon(Icons.arrow_back, size: 18),
                 label: const Text('Options'),
               ),
               const Spacer(),
               Flexible(
                 child: Wrap(
                   alignment: WrapAlignment.end,
-                  spacing: 8,
-                  runSpacing: 8,
+                  spacing: Insets.sm,
+                  runSpacing: Insets.sm,
                   children: [
                     OutlinedButton.icon(
                       key: const Key('ai-regenerate'),
                       onPressed: busy ? null : _regenerateAll,
-                      icon: const Icon(Icons.autorenew),
+                      icon: const Icon(Icons.autorenew, size: 18),
                       label: const Text('Regenerate'),
                     ),
                     FilledButton.icon(
@@ -1068,7 +1331,7 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
                               dimension: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Icon(Icons.check),
+                          : const Icon(Icons.check, size: 18),
                       label: Text(_isQuiz ? 'Save quiz' : 'Save note'),
                     ),
                   ],
@@ -1082,64 +1345,69 @@ class _AiGenerateScreenState extends ConsumerState<AiGenerateScreen> {
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({
-    required this.title,
-    required this.icon,
-    required this.children,
-  });
+/// Quiet titled group in an outlined card.
+class _Panel extends StatelessWidget {
+  const _Panel({required this.title, required this.child});
 
   final String title;
-  final IconData icon;
-  final List<Widget> children;
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 20, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Text(title, style: theme.textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ...children,
-          ],
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(
+          title: title,
+          padding: const EdgeInsets.only(bottom: Insets.md),
         ),
-      ),
-    );
-  }
+        child,
+      ],
+    ),
+  );
 }
 
-class _Notice extends StatelessWidget {
-  const _Notice({required this.icon, required this.text, this.color});
+/// One kind of source inside the Sources card.
+class _SourceBlock extends StatelessWidget {
+  const _SourceBlock({
+    required this.icon,
+    required this.title,
+    required this.child,
+    this.trailing,
+  });
 
   final IconData icon;
-  final String text;
-  final Color? color;
+  final String title;
+  final Widget child;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color ?? theme.colorScheme.tertiaryContainer,
-        borderRadius: BorderRadius.circular(12),
+    final colors = AppColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Insets.lg,
+        Insets.md,
+        Insets.lg,
+        Insets.lg,
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(icon, size: 20),
-          const SizedBox(width: 12),
-          Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 40),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: colors.mutedText),
+                Gaps.w8,
+                Expanded(child: Text(title, style: theme.textTheme.labelLarge)),
+                ?trailing,
+              ],
+            ),
+          ),
+          Gaps.h4,
+          child,
         ],
       ),
     );
