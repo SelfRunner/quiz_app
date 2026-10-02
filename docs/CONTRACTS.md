@@ -62,7 +62,7 @@ JSON keys are snake_case versions of the field names. `?` = nullable.
 | `Quiz` : Syncable | `id, subjectId, noteId?, ownerId, title, description?, source? (QuizSource), questions (List<Question>, default []), createdAt, updatedAt, deletedAt?` |
 | `Question` | `id, type (QuestionType), prompt, options (List<String>), correctIndices (List<int>), answerText?, explanation?` |
 | `QuestionType` | `mcqSingle 'mcq_single'`, `mcqMulti 'mcq_multi'`, `trueFalse 'true_false'`, `shortAnswer 'short_answer'`; `wireName`, `hasOptions` |
-| `QuizSource` | `contextText?, youtubeUrl?, provider? (LlmProviderId.wireName), model?` |
+| `QuizSource` | `contextText?, youtubeUrl?, provider? (LlmProviderId.wireName), model?, notes (List<QuizSourceRef{id, name}>, default []), attachments (List<QuizSourceRef>, default [])` (Wave 1: notes/attachments used as AI sources) |
 | `QuizAttempt` : Syncable | `id, quizId, ownerId (the attempting user), answers (List<QuestionAnswer>), score (double), total (int), startedAt, completedAt?, createdAt, updatedAt, deletedAt?` |
 | `QuestionAnswer` | `questionId, selectedIndices (List<int>), textAnswer?, isCorrect? (null = ungraded)` |
 | `Share` | `id, ownerId, recipientId, resourceType (ShareResourceType), resourceId, createdAt`; read-only joins (not in `toJson`): `recipient? (Profile), owner? (Profile), resourceTitle?` |
@@ -836,11 +836,11 @@ QuizGenerationRequest(questionCount: 10, sources: [
   inside `<source id="N">`), refers to attachments by number and tells the
   model to ground everything in the sources. Text sources share the 100k
   char budget fairly (long ones are cut with a note).
-* Generic generation (future decks): `DefaultAiService.generateStructured<T>(
+* Generic generation (future decks): `AiService.generateStructured<T>(
   StructuredGenerationRequest(sources:, task:, systemPrompt:, schema:,
   schemaName:, ...), validate: (json) => DraftValidation(...))` — same
-  source handling and one repair retry. (Not on the `AiService` interface
-  yet, to keep existing fakes compiling; cast or add it when decks land.)
+  source handling and one repair retry (on the interface since Wave 1;
+  `DraftValidation` is re-exported by `ai_service.dart`).
 
 **Readiness / gating.** `aiReadinessProvider` (`FutureProvider<AiReadiness>`,
 never errors) drives locked AI entry points:
@@ -882,11 +882,9 @@ model:, baseUrl:, manualOverride:)`):
 `TranscriptUnavailableException`. OpenRouter metadata comes from the public
 `GET {base}/models` (no key), cached 6 h per base URL; failures/unknown
 models = text only. Manual override (Settings: "This model supports images /
-PDF", OpenAI-compatible only): the store from `apiKeyStoreProvider` also
-implements `AiCapabilityOverrideStore` —
-`(store as AiCapabilityOverrideStore).setInputOverride(p, model,
-{AiInputKind.image, AiInputKind.pdf})` / `getInputOverride(p, model)`
-(per provider + model; empty set clears).
+PDF", OpenAI-compatible only): part of `ApiKeyStore` (no cast) —
+`store.setInputOverride(p, model, {AiInputKind.image, AiInputKind.pdf})` /
+`getInputOverride(p, model)` (per provider + model; empty set clears).
 
 **YouTube.** Gemini receives the URL natively (any form: watch, youtu.be,
 shorts, embed, live; public videos only). Other providers get the captions via

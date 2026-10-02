@@ -46,8 +46,8 @@ class AiSettingsRevision extends Notifier<int> {
 /// Device-local AI settings (API keys, selected provider/model, base URL,
 /// capability overrides), scoped to the signed-in user. Rebuilt when the
 /// user changes; signed out it returns nothing. Every write bumps
-/// [aiSettingsRevisionProvider]. The store also implements
-/// `AiCapabilityOverrideStore`.
+/// [aiSettingsRevisionProvider]. Capability overrides:
+/// `store.getInputOverride` / `setInputOverride`.
 final apiKeyStoreProvider = Provider<ApiKeyStore>((ref) {
   final revision = ref.read(aiSettingsRevisionProvider.notifier);
   return NotifyingApiKeyStore(

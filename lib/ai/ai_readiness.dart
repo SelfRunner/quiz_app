@@ -161,10 +161,7 @@ Future<AiReadiness> _check(
       model: model,
     );
   }
-  final Object s = store;
-  final Set<AiInputKind> manual = s is AiCapabilityOverrideStore
-      ? await s.getInputOverride(p, model)
-      : const {};
+  final manual = await store.getInputOverride(p, model);
   final caps = resolver != null
       ? await resolver.resolve(
           provider: p,

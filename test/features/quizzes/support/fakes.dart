@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:quiz_app/ai/ai_capabilities.dart';
 import 'package:quiz_app/ai/ai_providers.dart';
 import 'package:quiz_app/ai/ai_readiness.dart';
 import 'package:quiz_app/ai/ai_service.dart';
@@ -290,6 +291,13 @@ class FakeAiService implements AiService {
   }
 
   @override
+  Future<T> generateStructured<T>(
+    StructuredGenerationRequest request, {
+    required DraftValidation<T> Function(Map<String, dynamic> json) validate,
+    String what = 'result',
+  }) => throw UnimplementedError();
+
+  @override
   Future<List<String>> listModels(
     LlmProviderId provider, {
     String? apiKey,
@@ -364,22 +372,41 @@ class TestEnv {
     ),
   );
 
-  /// Whether AI entry points are unlocked (`aiReadinessProvider`).
+  /// Input kinds reported by `aiReadinessProvider` (ready while
+  /// `ai.selection` is set).
+  AiCapabilities capabilities = AiCapabilities.textOnly;
+
+  /// More overrides for feature-specific tests.
+  List<Override> get extraOverrides => const [];
+
+  /// Set false to lock AI entry points regardless of [ai.selection].
   bool aiReady = true;
 
+  AiReadiness _readiness() {
+    if (!aiReady) {
+      return const AiReadiness.notReady(
+        reason: 'Add an API key in Settings to use AI.',
+        issue: AiReadinessIssue.missingApiKey,
+      );
+    }
+    final sel = ai.selection;
+    if (sel == null) {
+      return const AiReadiness.notReady(
+        reason: 'Add an AI provider API key in Settings to use AI features.',
+        issue: AiReadinessIssue.noProvider,
+      );
+    }
+    return AiReadiness(
+      isConfigured: true,
+      providerId: sel.providerId,
+      model: sel.model,
+      capabilities: capabilities,
+    );
+  }
+
   List<Override> get overrides => [
-    aiReadinessProvider.overrideWith(
-      (ref) async => aiReady
-          ? const AiReadiness(
-              isConfigured: true,
-              providerId: LlmProviderId.openai,
-              model: 'gpt-test',
-            )
-          : const AiReadiness.notReady(
-              reason: 'Add an API key in Settings to use AI.',
-              issue: AiReadinessIssue.missingApiKey,
-            ),
-    ),
+    ...extraOverrides,
+    aiReadinessProvider.overrideWith((ref) async => _readiness()),
     currentUserIdProvider.overrideWithValue(userId),
     quizRepositoryProvider.overrideWithValue(quizzes),
     attemptRepositoryProvider.overrideWithValue(attempts),

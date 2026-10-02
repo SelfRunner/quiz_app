@@ -115,10 +115,7 @@ class DefaultAiService implements AiService {
 
   // ---------------------------------------------------------- structured
 
-  /// Generic generation from sources into `request.schema` (e.g. flashcard
-  /// decks), with the same source handling, capability checks and single
-  /// repair retry as quizzes/notes. [validate] returns the parsed value or
-  /// errors that are sent back to the model once.
+  @override
   Future<T> generateStructured<T>(
     StructuredGenerationRequest request, {
     required DraftValidation<T> Function(Map<String, dynamic> json) validate,
@@ -444,10 +441,10 @@ class DefaultAiService implements AiService {
     AiSelection selection,
     String? baseUrl,
   ) async {
-    final Object store = _keys;
-    final Set<AiInputKind> manual = store is AiCapabilityOverrideStore
-        ? await store.getInputOverride(selection.providerId, selection.model)
-        : const {};
+    final manual = await _keys.getInputOverride(
+      selection.providerId,
+      selection.model,
+    );
     final resolver = capabilities;
     if (resolver != null) {
       return resolver.resolve(

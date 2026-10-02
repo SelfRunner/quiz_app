@@ -1,4 +1,3 @@
-import 'ai_capabilities.dart';
 import 'ai_source.dart';
 import 'api_key_store.dart';
 import 'llm_provider.dart';
@@ -7,7 +6,7 @@ import 'llm_provider.dart';
 /// write, so readers such as `aiReadinessProvider` can refresh. Used by
 /// `apiKeyStoreProvider`; tests overriding that provider with a plain store
 /// get no notifications.
-class NotifyingApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
+class NotifyingApiKeyStore implements ApiKeyStore {
   NotifyingApiKeyStore(this.inner, {required this.onChanged});
 
   final ApiKeyStore inner;
@@ -78,22 +77,12 @@ class NotifyingApiKeyStore implements ApiKeyStore, AiCapabilityOverrideStore {
   Future<Set<AiInputKind>> getInputOverride(
     LlmProviderId provider,
     String model,
-  ) async {
-    final Object s = inner;
-    return s is AiCapabilityOverrideStore
-        ? s.getInputOverride(provider, model)
-        : const {};
-  }
+  ) => inner.getInputOverride(provider, model);
 
   @override
   Future<void> setInputOverride(
     LlmProviderId provider,
     String model,
     Set<AiInputKind> kinds,
-  ) async {
-    final Object s = inner;
-    if (s is AiCapabilityOverrideStore) {
-      await _notify(s.setInputOverride(provider, model, kinds));
-    }
-  }
+  ) => _notify(inner.setInputOverride(provider, model, kinds));
 }

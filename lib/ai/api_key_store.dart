@@ -1,3 +1,5 @@
+import 'ai_capabilities.dart';
+import 'ai_source.dart';
 import 'llm_provider.dart';
 
 /// Local-only storage for AI settings (flutter_secure_storage). Keys are
@@ -9,7 +11,10 @@ import 'llm_provider.dart';
 /// not delete anything, so the same user gets their keys back on sign-in.
 ///
 /// Implementation: `SecureApiKeyStore` (`secure_api_key_store.dart`).
-abstract interface class ApiKeyStore {
+///
+/// Also holds the per-model capability override (it is an
+/// [AiCapabilityOverrideStore], so no cast is needed).
+abstract interface class ApiKeyStore implements AiCapabilityOverrideStore {
   Future<String?> getApiKey(LlmProviderId provider);
 
   /// Stores [apiKey] (trimmed). An empty key deletes the entry.
@@ -41,6 +46,23 @@ abstract interface class ApiKeyStore {
   Future<void> setExtraHeaders(
     LlmProviderId provider,
     Map<String, String> headers,
+  );
+
+  /// Extra input kinds the user enabled for [model] ("This model supports
+  /// images / PDF", OpenAI-compatible endpoints); empty when none.
+  @override
+  Future<Set<AiInputKind>> getInputOverride(
+    LlmProviderId provider,
+    String model,
+  );
+
+  /// Replaces the override for [model]; an empty set clears it. Only
+  /// [AiInputKind.image] and [AiInputKind.pdf] are meaningful.
+  @override
+  Future<void> setInputOverride(
+    LlmProviderId provider,
+    String model,
+    Set<AiInputKind> kinds,
   );
 
   /// Providers that currently have a key stored.
