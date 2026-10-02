@@ -38,7 +38,7 @@ Future<Result<T>> runCatching<T>(Future<T> Function() body) async {
     return Err(e);
   } catch (e, st) {
     return Err(
-      UnknownException('Something went wrong.', cause: e, stackTrace: st),
+      UnknownException("That didn't work. Try again.", cause: e, stackTrace: st),
     );
   }
 }

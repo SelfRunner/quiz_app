@@ -6,7 +6,7 @@ import '../errors/app_exception.dart';
 /// fallback (raw errors may contain internals and are never shown).
 String errorMessage(
   Object? error, {
-  String fallback = 'Something went wrong. Please try again.',
+  String fallback = "Couldn't complete that. Check your connection and try again.",
 }) {
   if (error is AppException) return error.message;
   return fallback;

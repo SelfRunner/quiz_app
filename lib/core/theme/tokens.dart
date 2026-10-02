@@ -57,8 +57,10 @@ abstract final class Radii {
   static const double xs = 4;
   static const double sm = 6;
   static const double md = 8;
-  static const double lg = 10;
-  static const double xl = 14;
+  static const double lg = 12;
+
+  /// Same as [lg]: one radius for cards, dialogs and sheets.
+  static const double xl = lg;
 
   static const BorderRadius xsAll = BorderRadius.all(Radius.circular(xs));
   static const BorderRadius smAll = BorderRadius.all(Radius.circular(sm));
@@ -75,6 +77,9 @@ abstract final class ContentWidth {
   /// Long-form reading (notes, quiz play).
   static const double readable = 880;
 
+  /// Running prose (note bodies): ~75 characters per line at body size.
+  static const double prose = 720;
+
   /// Lists and card grids.
   static const double wide = 1200;
 }
@@ -84,4 +89,11 @@ abstract final class Motion {
   static const Duration fast = Duration(milliseconds: 120);
   static const Duration medium = Duration(milliseconds: 200);
   static const Duration slow = Duration(milliseconds: 320);
+
+  /// Default easing for enter/move transitions.
+  static const Curve curve = Cubic(0.16, 1, 0.3, 1);
+
+  /// [d], or zero when the platform asks to reduce motion.
+  static Duration of(BuildContext context, Duration d) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false ? Duration.zero : d;
 }

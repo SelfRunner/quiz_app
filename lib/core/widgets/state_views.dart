@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_colors.dart';
 import '../theme/tokens.dart';
 import 'error_message.dart';
+import 'loading_skeleton.dart';
 
 /// Minimal empty state: a thin line icon, a title, an optional message and
 /// action. Centered and scrollable by default; [compact] renders it inline
@@ -108,15 +109,15 @@ class AsyncValueView<T> extends StatelessWidget {
   final Widget Function(T data) data;
   final VoidCallback? onRetry;
 
-  /// Shown while loading without data (defaults to a centered spinner; e.g.
-  /// pass `const LoadingSkeleton()` for lists).
+  /// Shown while loading without data (defaults to skeleton rows; pass a
+  /// spinner or a custom skeleton when the layout differs).
   final Widget? loading;
 
   @override
   Widget build(BuildContext context) {
     if (value.hasValue) return data(value.requireValue);
     if (value.hasError) return ErrorView(error: value.error, onRetry: onRetry);
-    return loading ?? const Center(child: CircularProgressIndicator());
+    return loading ?? const LoadingSkeleton();
   }
 }
 
