@@ -14,6 +14,7 @@ import '../../../../data/data_providers.dart';
 import '../../../../data/models/models.dart';
 import '../../../../data/repositories/attachment_repository.dart';
 import '../../../ai_generate/presentation/ai_generate_screen.dart';
+import '../../../chat/widgets/chat_launcher.dart';
 import '../../application/attachment_actions.dart';
 import '../../application/attachment_picker.dart';
 import '../../application/file_saver.dart';
@@ -238,6 +239,13 @@ class AttachmentRow extends ConsumerWidget {
       trailing: upload == null ? null : _UploadStatus(state: upload),
       onTap: () => openAttachment(context, ref, a),
       actions: [
+        ChatLauncherButton(
+          scopeType: ChatScopeType.attachment,
+          scopeId: a.id,
+          title: a.name,
+          compact: true,
+          tooltip: 'Ask AI about this file',
+        ),
         if (canEdit)
           AiGate(
             onReady: useInAi,

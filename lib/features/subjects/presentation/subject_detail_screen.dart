@@ -7,6 +7,7 @@ import '../../../core/widgets/design_system.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../../chat/widgets/chat_launcher.dart';
 import '../../decks/widgets/deck_list_section.dart';
 import '../../notes/presentation/widgets/note_tile.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
@@ -68,6 +69,13 @@ class _SubjectDetail extends ConsumerWidget {
     final theme = Theme.of(context);
 
     final actions = <Widget>[
+      // Chats are private, so recipients of a shared subject can chat too.
+      ChatLauncherButton(
+        scopeType: ChatScopeType.subject,
+        scopeId: subject.id,
+        title: subject.title,
+        compact: true,
+      ),
       if (isOwner) ...[
         GenerateWithAiButton(subjectId: subject.id),
         IconButton(
