@@ -7,11 +7,16 @@ import 'package:go_router/go_router.dart';
 import '../../../core/router/routes.dart';
 import '../../../core/widgets/design_system.dart';
 import '../../../core/widgets/error_message.dart';
+import '../../../core/widgets/export_menu.dart';
+import '../../../core/widgets/pin_button.dart';
 import '../../../core/widgets/sync_status_indicator.dart';
+import '../../../core/widgets/tag_widgets.dart';
 import '../../../data/data_providers.dart';
 import '../../../data/models/models.dart';
 import '../../../data/repositories/note_repository.dart';
+import '../../../data/repositories/organization_repository.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
+import '../../chat/widgets/chat_launcher.dart';
 import '../../decks/widgets/deck_list_section.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
@@ -19,6 +24,7 @@ import '../../subjects/presentation/subject_detail_screen.dart' show MetaChip;
 import '../application/note_actions.dart';
 import '../application/note_ai_tools.dart';
 import '../application/note_document.dart';
+import '../application/note_export_actions.dart';
 import '../application/note_markdown_syntax.dart';
 import 'widgets/note_ai_tools.dart';
 import 'widgets/note_toc.dart';
@@ -156,6 +162,96 @@ class _NoteViewState extends ConsumerState<_NoteView> {
     );
 
     final showToc = noteNeedsToc(headings);
+    // Phones fold pin / share / export into the "More" menu.
+    final wideBar = Breakpoints.isMedium(context);
+    final exportItems = noteExportItems(
+      ref,
+      note,
+      subjectTitle: subject?.title,
+    );
+    void editTags() => editItemTags(
+      context,
+      ref,
+      kind: TaggableKind.note,
+      id: note.id,
+      tags: note.tags,
+    );
+
+    Future<void> onMenu(String v) async {
+      switch (v) {
+        case 'pin':
+          await setNotePinned(context, ref, note, !note.pinned);
+        case 'share':
+          await showShareSheet(
+            context,
+            type: ShareResourceType.note,
+            resourceId: note.id,
+            title: title,
+          );
+        case 'tags':
+          editTags();
+        case 'export-md':
+          await runExport(context, ref, exportItems[0]);
+        case 'export-pdf':
+          await runExport(context, ref, exportItems[1]);
+        case 'copy-md':
+          await copyNoteAsMarkdown(context, note, subjectTitle: subject?.title);
+        case 'delete':
+          final deleted = await NoteActions.delete(context, ref, note);
+          if (deleted && context.mounted) {
+            context.canPop()
+                ? context.pop()
+                : context.go(AppRoutes.subject(note.subjectId));
+          }
+      }
+    }
+
+    PopupMenuItem<String> menuItem(String value, IconData icon, String label) =>
+        PopupMenuItem(
+          key: Key('note-menu-$value'),
+          value: value,
+          child: ListTile(
+            leading: Icon(icon),
+            title: Text(label),
+            contentPadding: EdgeInsets.zero,
+          ),
+        );
+
+    final moreMenu = PopupMenuButton<String>(
+      key: const Key('note-more'),
+      tooltip: 'More',
+      icon: const Icon(Icons.more_horiz),
+      onSelected: (v) => unawaited(onMenu(v)),
+      itemBuilder: (_) => [
+        if (isOwner && !wideBar) ...[
+          menuItem(
+            'pin',
+            note.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+            note.pinned ? 'Unpin note' : 'Pin note',
+          ),
+          menuItem('share', Icons.share_outlined, 'Share'),
+        ],
+        if (isOwner) menuItem('tags', Icons.sell_outlined, 'Edit tags'),
+        if (!wideBar) ...[
+          menuItem(
+            'export-md',
+            Icons.description_outlined,
+            'Export as Markdown (.md)',
+          ),
+          menuItem(
+            'export-pdf',
+            Icons.picture_as_pdf_outlined,
+            'Export as PDF',
+          ),
+        ],
+        menuItem('copy-md', Icons.content_copy_outlined, 'Copy as Markdown'),
+        if (isOwner) ...[
+          const PopupMenuDivider(),
+          menuItem('delete', Icons.delete_outline, 'Delete note'),
+        ],
+      ],
+    );
+
     final actions = <Widget>[
       if (showToc && !twoPane)
         IconButton(
@@ -164,6 +260,14 @@ class _NoteViewState extends ConsumerState<_NoteView> {
           icon: const Icon(Icons.toc),
           onPressed: _showTocSheet,
         ),
+      // Chats are private, so readers of a shared note can chat too.
+      ChatLauncherButton(
+        scopeType: ChatScopeType.note,
+        scopeId: note.id,
+        title: title,
+        compact: true,
+        tooltip: 'Ask AI about this note',
+      ),
       NoteAiMenuButton(host: _aiHost(isOwner)),
       if (isOwner) ...[
         AiGate(
@@ -175,52 +279,42 @@ class _NoteViewState extends ConsumerState<_NoteView> {
             onPressed: generateQuiz,
           ),
         ),
-        IconButton(
-          tooltip: 'Share',
-          icon: const Icon(Icons.share_outlined),
-          onPressed: () => showShareSheet(
-            context,
-            type: ShareResourceType.note,
-            resourceId: note.id,
-            title: title,
+        if (wideBar) ...[
+          PinButton.item(
+            kind: TaggableKind.note,
+            id: note.id,
+            pinned: note.pinned,
           ),
-        ),
+          IconButton(
+            tooltip: 'Share',
+            icon: const Icon(Icons.share_outlined),
+            onPressed: () => showShareSheet(
+              context,
+              type: ShareResourceType.note,
+              resourceId: note.id,
+              title: title,
+            ),
+          ),
+        ],
         IconButton(
           key: const Key('note-edit'),
           tooltip: 'Edit',
           icon: const Icon(Icons.edit_outlined),
           onPressed: () => context.push(AppRoutes.noteEdit(note.id)),
         ),
-        PopupMenuButton<String>(
-          tooltip: 'More',
-          icon: const Icon(Icons.more_horiz),
-          onSelected: (v) async {
-            if (v != 'delete') return;
-            final deleted = await NoteActions.delete(context, ref, note);
-            if (deleted && context.mounted) {
-              context.canPop()
-                  ? context.pop()
-                  : context.go(AppRoutes.subject(note.subjectId));
-            }
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(
-              value: 'delete',
-              child: ListTile(
-                leading: Icon(Icons.delete_outline),
-                title: Text('Delete note'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ],
-        ),
-        Gaps.w4,
-      ] else
+      ],
+      if (wideBar)
+        ExportMenu(key: const Key('note-export'), items: exportItems),
+      moreMenu,
+      if (isOwner)
+        Gaps.w4
+      else
         Padding(
           padding: const EdgeInsets.only(right: Insets.sm),
           child: CopyToAccountButton(
             type: ShareResourceType.note,
             resourceId: note.id,
+            compact: !wideBar,
           ),
         ),
     ];
@@ -252,6 +346,14 @@ class _NoteViewState extends ConsumerState<_NoteView> {
                 ],
               ),
             ),
+          ),
+        if (note.pinned)
+          Icon(
+            Icons.push_pin,
+            key: const Key('note-pinned-indicator'),
+            size: 14,
+            color: colors.faintText,
+            semanticLabel: 'Pinned',
           ),
         if (!isOwner)
           const MetaChip(
@@ -309,6 +411,35 @@ class _NoteViewState extends ConsumerState<_NoteView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(title, style: theme.textTheme.headlineMedium),
+        if (note.tags.isNotEmpty || isOwner) ...[
+          Gaps.h8,
+          Wrap(
+            key: const Key('note-tags'),
+            spacing: Insets.xs,
+            runSpacing: Insets.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TagChips(tags: note.tags),
+              if (isOwner)
+                TextButton.icon(
+                  key: const Key('note-tags-button'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: colors.mutedText,
+                  ),
+                  onPressed: editTags,
+                  icon: Icon(
+                    note.tags.isEmpty
+                        ? Icons.sell_outlined
+                        : Icons.edit_outlined,
+                    size: 16,
+                  ),
+                  label: Text(note.tags.isEmpty ? 'Add tags' : 'Edit tags'),
+                ),
+            ],
+          ),
+        ],
         Gaps.h8,
         meta,
         Padding(

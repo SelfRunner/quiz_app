@@ -9,6 +9,7 @@ import '../../../data/models/models.dart';
 import '../../ai_generate/presentation/ai_generate_screen.dart';
 import '../../chat/widgets/chat_launcher.dart';
 import '../../decks/widgets/deck_list_section.dart';
+import '../../notes/application/note_export_actions.dart' show notesPinnedFirst;
 import '../../notes/presentation/widgets/note_tile.dart';
 import '../../quizzes/widgets/quiz_list_section.dart';
 import '../../sharing/widgets/share_actions.dart';
@@ -403,7 +404,9 @@ class _NotesTab extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final n in items) NoteTile(note: n, canEdit: isOwner),
+            // Pinned first, each group by last update.
+            for (final n in notesPinnedFirst(items))
+              NoteTile(note: n, canEdit: isOwner),
           ],
         );
       },

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:quiz_app/ai/ai_providers.dart';
@@ -79,8 +80,14 @@ class FakeAiToolsService implements AiToolsService {
   }) => throw UnimplementedError();
 }
 
-/// Notes routes (view, edit, plus stubs for links) with fakes.
-Widget noteTestApp(TestDeps deps, String initial, {FakeAiToolsService? tools}) {
+/// Notes routes (view, edit, plus stubs for links) with fakes; [overrides]
+/// are added after the [deps] ones (e.g. organization repository, saver).
+Widget noteTestApp(
+  TestDeps deps,
+  String initial, {
+  FakeAiToolsService? tools,
+  List<Override> overrides = const [],
+}) {
   final router = GoRouter(
     initialLocation: initial,
     routes: [
@@ -102,6 +109,10 @@ Widget noteTestApp(TestDeps deps, String initial, {FakeAiToolsService? tools}) {
       ),
       GoRoute(path: '/settings', builder: (_, _) => const Text('settings')),
       GoRoute(
+        path: '/search',
+        builder: (_, state) => Text('search ${state.uri.queryParameters['q']}'),
+      ),
+      GoRoute(
         path: '/ai/generate',
         builder: (_, state) => Text(state.uri.toString()),
       ),
@@ -111,6 +122,7 @@ Widget noteTestApp(TestDeps deps, String initial, {FakeAiToolsService? tools}) {
     overrides: [
       ...deps.overrides,
       aiToolsServiceProvider.overrideWithValue(tools ?? FakeAiToolsService()),
+      ...overrides,
     ],
     child: MaterialApp.router(routerConfig: router),
   );

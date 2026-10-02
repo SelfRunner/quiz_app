@@ -60,6 +60,9 @@ dependencies:
   # (pure Dart, web + desktop + mobile).
   flutter_math_fork: ^0.7.4
   re_highlight: ^0.0.3
+  # Note PDF export (pure Dart, web + desktop + mobile). 3.13+ needs xml 7,
+  # which youtube_explode_dart (xml 6) does not allow yet.
+  pdf: ^3.11.0
 
 dev_dependencies:
   flutter_test:
